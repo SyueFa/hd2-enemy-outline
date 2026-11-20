@@ -1,79 +1,151 @@
 -- HD2-Addon: mods/combat/enemy_outline_off
--- Enemy Outline Off: hides the HD2EnemyHull outline of an enemy when it dies.
--- Needs MDL3 + stock HD2 Data Hub 0.6.6 + HD2EnemyHull (outline models).
+-- 敵人描邊(死亡自動關閉) 1.1
+-- Hides the HD2EnemyHull outline of an enemy when it dies.
+-- Needs MDL3 + stock HD2 Data Hub 0.6.6 + HD2EnemyHull outline models (same package).
 --
--- How: the Hub reports each death with its position. Among the outlined enemy
--- units (looked up by resource name only - never a full unit scan), the one
--- within 1 m of that position is the dead enemy; if its mesh count matches the
--- HD2EnemyHull resource table, its outline meshes are hidden.
--- No drawing, no camera, no raycasts.
+-- 1.1:
+--  * The death event's entity type is the unit resource hash, so a typed death only
+--    searches units of that exact resource (radius 4 m). Untyped deaths fall back to
+--    the nearest outlined body within 1 m.
+--  * Deaths of units the Hub marks kill=false (Impaler, tentacles, turrets, emplacements)
+--    are no longer ignored when their type is in the outline table.
+--  * Unmatched deaths are retried for 1.5 s.
+--  * Attachments (weapons, backpacks, shields, tank/walker turrets, tongues, Impaler
+--    tentacles) go dark when the nearest body of their parent group is a dead one.
+--  * Mesh tables re-read from each unit's mesh list (fixes Dragonroach, Overseer jet,
+--    Hunter tier3, Hulk assault, Fleshmob, Illuminate turrets).
+--  * 112 resources (was 53): Iron Fleet, Ivory Legion, Gloom variants, tanks,
+--    dropships, gunships, walkers, war machine, etc.
 
 local OWNER = 'mods/combat/enemy_outline_off'
-local VERSION = '1.0'
+local VERSION = '1.1'
 local sr = rawget(_G, 'stingray')
 if type(sr) ~= 'table' then return {version=VERSION, error='no stingray'} end
 
 local SETTLE = 3          -- seconds after the mission starts before touching units
-local RADIUS2 = 1.0       -- match radius squared (1 m)
-local REFRESH = 1         -- seconds between unit list refreshes
+local TYPED_R2 = 16.0     -- typed death: same resource within 4 m
+local ANY_R2 = 1.0        -- untyped death: any outlined body within 1 m
+local RETRY = 1.5         -- seconds an unmatched death is retried
+local REFRESH = 1         -- seconds between unit list refreshes / attachment pass
 
--- resource name -> {m = mesh count, o = outline mesh indices (1-based)}
--- (parsed from HD2EnemyHull 0.0.22 unit resources)
+-- resource -> m = mesh count, o = outline mesh indices (1-based), t = entity type hash,
+-- g = link groups (bodies), p = parent group + r = link radius in m (attachments)
 local OUTLINE_UNITS={
-    ['content/env_illuminate/gameplay/il_turret_01']={m=40,o={17,18,19,20,37,38,39,40}},
-    ['content/env_illuminate/gameplay/il_turret_tactical_obj']={m=40,o={17,18,19,20,37,38,39,40}},
-    ['content/fac_bugs/cha_boomer/cha_boomer']={m=11,o={10,11}},
-    ['content/fac_bugs/cha_boomer/cha_boomer_tier_2']={m=31,o={30,31}},
-    ['content/fac_bugs/cha_boomer_burrower/cha_boomer_burrower']={m=31,o={30,31}},
-    ['content/fac_bugs/cha_boomer_defiler/cha_boomer_defiler']={m=11,o={10,11}},
-    ['content/fac_bugs/cha_boomer_nurser/cha_boomer_nurser']={m=31,o={30,31}},
-    ['content/fac_bugs/cha_charger/cha_charger']={m=12,o={10,11,12}},
-    ['content/fac_bugs/cha_charger_acid/cha_charger_acid']={m=11,o={10,11}},
-    ['content/fac_bugs/cha_charger_bull/cha_charger_bull']={m=11,o={10,11}},
-    ['content/fac_bugs/cha_charger_burrower/cha_charger_burrower']={m=11,o={10,11}},
-    ['content/fac_bugs/cha_dragon/cha_dragon']={m=24,o={11,12,23,24}},
-    ['content/fac_bugs/cha_hive_lord/cha_hive_lord']={m=52,o={43,44,45,46,47,48,49,50,51,52}},
-    ['content/fac_bugs/cha_hunter/cha_hunter']={m=34,o={33,34}},
-    ['content/fac_bugs/cha_hunter/cha_hunter_tier3']={m=22,o={10,11,21,22}},
-    ['content/fac_bugs/cha_impaler/cha_impaler']={m=11,o={10,11}},
-    ['content/fac_bugs/cha_scavenger/cha_scavenger']={m=33,o={32,33}},
-    ['content/fac_bugs/cha_scavenger/cha_scavenger_gloom']={m=35,o={33,34,35}},
-    ['content/fac_bugs/cha_scavenger_defiler/cha_scavenger_defiler']={m=33,o={32,33}},
-    ['content/fac_bugs/cha_scavenger_predator/cha_scavenger_predator']={m=33,o={32,33}},
-    ['content/fac_bugs/cha_scavenger_spitter/cha_scavenger_spitter']={m=33,o={32,33}},
-    ['content/fac_bugs/cha_shrieker/cha_shrieker']={m=16,o={14,15,16}},
-    ['content/fac_bugs/cha_stalker/cha_stalker']={m=36,o={35,36}},
-    ['content/fac_bugs/cha_strider/cha_strider']={m=31,o={31}},
-    ['content/fac_bugs/cha_strider/cha_strider_gloom']={m=32,o={31,32}},
-    ['content/fac_bugs/cha_warrior/cha_warrior']={m=29,o={28,29}},
-    ['content/fac_bugs/cha_warrior/cha_warrior_tier_1']={m=29,o={28,29}},
-    ['content/fac_bugs/cha_warrior_acid/cha_warrior_acid']={m=29,o={28,29}},
-    ['content/fac_bugs/cha_warrior_big/cha_warrior_big']={m=29,o={28,29}},
-    ['content/fac_bugs/cha_warrior_big/cha_warrior_big_tier2']={m=29,o={28,29}},
-    ['content/fac_bugs/cha_warrior_burrower/cha_warrior_burrower']={m=11,o={10,11}},
-    ['content/fac_bugs/cha_warrior_plus/cha_warrior_plus']={m=29,o={28,29}},
-    ['content/fac_cyborgs/cha_berserker/cha_berserker']={m=33,o={30,31,32,33}},
-    ['content/fac_cyborgs/cha_conscript/cha_conscript']={m=27,o={27}},
-    ['content/fac_cyborgs/cha_conscript/cha_conscript_tier_2']={m=28,o={27,28}},
-    ['content/fac_cyborgs/cha_conscript_commander/cha_conscript_commander']={m=27,o={27}},
-    ['content/fac_cyborgs/cha_lieutenant_assault/cha_lieutenant_assault']={m=20,o={9,10,19,20}},
-    ['content/fac_cyborgs/cha_soldier/cha_soldier']={m=33,o={30,31,32,33}},
-    ['content/fac_cyborgs/cha_soldier/cha_soldier_rocket']={m=31,o={30,31}},
-    ['content/fac_cyborgs/emplacements/cyborg_emplacement_hmg/cyborg_emplacement_hmg']={m=21,o={18,19,20,21}},
-    ['content/fac_cyborgs/emplacements/cyborg_emplacement_mg/cyborg_emplacement_mg']={m=7,o={7}},
-    ['content/fac_cyborgs/turrets/cyborg_turret_small_autocannon/cyborg_turret_small_autocannon']={m=2,o={2}},
-    ['content/fac_illuminate/cha_beamer_champion/cha_beamer_champion']={m=20,o={17,18,19,20}},
-    ['content/fac_illuminate/cha_bodyhorror_bladed/cha_bodyhorror_bladed']={m=20,o={19,20}},
-    ['content/fac_illuminate/cha_bodyhorror_helmetguy/cha_bodyhorror_helmetguy']={m=16,o={16}},
-    ['content/fac_illuminate/cha_corrupted/cha_corrupted']={m=20,o={19,20}},
-    ['content/fac_illuminate/cha_exomech_melee/cha_exomech_melee']={m=71,o={70,71}},
-    ['content/fac_illuminate/cha_exomech_ranged/cha_exomech_ranged']={m=51,o={50,51}},
-    ['content/fac_illuminate/cha_illuminate_guy_staff/cha_illuminate_guy_staff']={m=18,o={17,18}},
-    ['content/fac_illuminate/cha_jet_champion/cha_jet_champion']={m=36,o={17,18,35,36}},
-    ['content/fac_illuminate/cha_meatglue/cha_meatglue']={m=2,o={1,2}},
-    ['content/fac_illuminate/cha_observer/cha_observer']={m=10,o={9,10}},
-    ['content/fac_illuminate/cha_tripod/cha_tripod']={m=22,o={21,22}},
-}
+    ['content/env_illuminate/gameplay/il_turret_01']={m=20,o={17,18,19,20},t='0883366204E1CCC5',g={}},
+    ['content/env_illuminate/gameplay/il_turret_tactical_obj']={m=20,o={17,18,19,20},t='1448D494665D01A0',g={}},
+    ['content/fac_bugs/cha_boomer/cha_boomer']={m=11,o={10,11},t='36AA99CCE5E60146',g={}},
+    ['content/fac_bugs/cha_boomer/cha_boomer_tier_2']={m=31,o={30,31},t='CCAE5264ACD591B7',g={}},
+    ['content/fac_bugs/cha_boomer_burrower/cha_boomer_burrower']={m=31,o={30,31},t='A381A11C07D3EB94',g={}},
+    ['content/fac_bugs/cha_boomer_defiler/cha_boomer_defiler']={m=11,o={10,11},t='662A7907531B45E5',g={}},
+    ['content/fac_bugs/cha_boomer_nurser/cha_boomer_nurser']={m=31,o={30,31},t='CC7022FDD172089B',g={}},
+    ['content/fac_bugs/cha_charger/cha_charger']={m=12,o={10,11,12},t='1A7FCDFF98C664B0',g={}},
+    ['content/fac_bugs/cha_charger_acid/cha_charger_acid']={m=11,o={10,11},t='6B202392F4AB605E',g={}},
+    ['content/fac_bugs/cha_charger_bull/cha_charger_bull']={m=11,o={10,11},t='3AFF5FD7D5450B99',g={}},
+    ['content/fac_bugs/cha_charger_burrower/cha_charger_burrower']={m=11,o={10,11},t='0AB7B92B131C228C',g={}},
+    ['content/fac_bugs/cha_dragon/cha_dragon']={m=12,o={11,12},t='960B48A421A3FAAA',g={}},
+    ['content/fac_bugs/cha_hive_lord/cha_hive_lord']={m=52,o={43,44,45,46,47,48,49,50,51,52},t='D465D9C7F77A07CB',g={}},
+    ['content/fac_bugs/cha_hunter/cha_hunter']={m=34,o={33,34},t='A478D36A62A861F4',g={'hunter'}},
+    ['content/fac_bugs/cha_hunter/cha_hunter_gloom_tier1']={m=34,o={33,34},t='C28B3482E73D1EA9',g={'hunter'}},
+    ['content/fac_bugs/cha_hunter/cha_hunter_tier3']={m=11,o={10,11},t='D7E2C78B1EF4A8E1',g={'hunter'}},
+    ['content/fac_bugs/cha_hunter/cha_hunter_tongue']={m=2,o={2},t='E6F4C24C54537229',p='hunter',r=8},
+    ['content/fac_bugs/cha_impaler/cha_impaler']={m=11,o={10,11},t='DCF8E74212FBEE3B',g={'impaler'}},
+    ['content/fac_bugs/cha_impaler/cha_impaler_tentacle']={m=12,o={11,12},t='672F7DA17F3BA34A',p='impaler',r=40},
+    ['content/fac_bugs/cha_scavenger/cha_scavenger']={m=33,o={32,33},t='C14E0E887E7D2106',g={}},
+    ['content/fac_bugs/cha_scavenger/cha_scavenger_captive']={m=33,o={32,33},t='5B968CD78F8BC7A0',g={}},
+    ['content/fac_bugs/cha_scavenger/cha_scavenger_gloom']={m=35,o={33,34,35},t='DB964631BE1CF501',g={}},
+    ['content/fac_bugs/cha_scavenger_defiler/cha_scavenger_defiler']={m=33,o={32,33},t='8AB62629DB3D6AC8',g={}},
+    ['content/fac_bugs/cha_scavenger_predator/cha_scavenger_predator']={m=33,o={32,33},t='AAB438596F5E8FD9',g={}},
+    ['content/fac_bugs/cha_scavenger_spitter/cha_scavenger_spitter']={m=33,o={32,33},t='72A83E49CED6DB3D',g={}},
+    ['content/fac_bugs/cha_shrieker/cha_shrieker']={m=16,o={14,15,16},t='64090088502435DD',g={}},
+    ['content/fac_bugs/cha_stalker/cha_stalker']={m=36,o={35,36},t='F540CA9D9D4A422E',g={'stalker'}},
+    ['content/fac_bugs/cha_stalker/stalker_tongue']={m=2,o={2},t='4ABDEE603735E373',p='stalker',r=8},
+    ['content/fac_bugs/cha_strider/cha_strider']={m=31,o={31},t='9E2E17F2CCCCAFDD',g={}},
+    ['content/fac_bugs/cha_strider/cha_strider_gloom']={m=32,o={31,32},t='EF04CB84D097A497',g={}},
+    ['content/fac_bugs/cha_warrior/cha_warrior']={m=29,o={28,29},t='09872E66D1276E1F',g={}},
+    ['content/fac_bugs/cha_warrior/cha_warrior_gloom_tier_1']={m=11,o={10,11},t='1BAEEF36A88AE579',g={}},
+    ['content/fac_bugs/cha_warrior/cha_warrior_tier_1']={m=29,o={28,29},t='BE39E313A1E46BB9',g={}},
+    ['content/fac_bugs/cha_warrior_acid/cha_warrior_acid']={m=29,o={28,29},t='10081ACEF6163EF6',g={}},
+    ['content/fac_bugs/cha_warrior_big/cha_warrior_big']={m=29,o={28,29},t='D522FD4748D443A5',g={}},
+    ['content/fac_bugs/cha_warrior_big/cha_warrior_big_tier2']={m=29,o={28,29},t='F79CD8BB654397DF',g={}},
+    ['content/fac_bugs/cha_warrior_burrower/cha_warrior_burrower']={m=11,o={10,11},t='A35207C6F2150806',g={}},
+    ['content/fac_bugs/cha_warrior_plus/cha_warrior_plus']={m=29,o={28,29},t='A1F37BF2A40FBDE4',g={}},
+    ['content/fac_cyborgs/cha_berserker/cha_berserker']={m=33,o={30,31,32,33},t='A6A68D8AF177F3A1',g={'cyborg'}},
+    ['content/fac_cyborgs/cha_berserker/cha_berserker_iron_fleet']={m=33,o={30,31,32,33},t='54E107DACF6929CB',g={'cyborg'}},
+    ['content/fac_cyborgs/cha_conscript/cha_conscript']={m=27,o={27},t='B2B3056BDF28E57B',g={'cyborg'}},
+    ['content/fac_cyborgs/cha_conscript/cha_conscript_iron_fleet']={m=28,o={27,28},t='9821303BD499CD62',g={'cyborg'}},
+    ['content/fac_cyborgs/cha_conscript/cha_conscript_ivory_legion']={m=29,o={28,29},t='9F57782F00E6ED20',g={'cyborg'}},
+    ['content/fac_cyborgs/cha_conscript/cha_conscript_tier_2']={m=28,o={27,28},t='64BA5F030B114EC1',g={'cyborg'}},
+    ['content/fac_cyborgs/cha_conscript_commander/cha_conscript_commander']={m=27,o={27},t='A71AAFD82C6EBC92',g={'cyborg'}},
+    ['content/fac_cyborgs/cha_cyborg_elite/cha_cyborg_elite_rusher']={m=39,o={36,37,38,39},t='746A7F3BEDA32699',g={'cyborg'}},
+    ['content/fac_cyborgs/cha_cyborg_elite/cha_elite_female']={m=45,o={42,43,44,45},t='9F44121C554DAE89',g={'cyborg'}},
+    ['content/fac_cyborgs/cha_lieutenant/cha_lieutenant']={m=10,o={9,10},t='846BC06C6B213A06',g={'cyborg'}},
+    ['content/fac_cyborgs/cha_lieutenant_assault/cha_lieutenant_assault']={m=10,o={9,10},t='B16493B009EEC762',g={'cyborg'}},
+    ['content/fac_cyborgs/cha_soldier/cha_soldier']={m=33,o={30,31,32,33},t='AE63E525853D7044',g={'cyborg'}},
+    ['content/fac_cyborgs/cha_soldier/cha_soldier_heavy_weapon']={m=31,o={30,31},t='3D9C95BD03C0C7CF',g={'cyborg'}},
+    ['content/fac_cyborgs/cha_soldier/cha_soldier_iron_fleet']={m=33,o={30,31,32,33},t='C626D2BB495A202D',g={'cyborg'}},
+    ['content/fac_cyborgs/cha_soldier/cha_soldier_rocket']={m=31,o={30,31},t='DB7139323C40AE6F',g={'cyborg'}},
+    ['content/fac_cyborgs/emplacements/cyborg_emplacement_hmg/cyborg_emplacement_hmg']={m=21,o={18,19,20,21},t='A98F8B559C7993D8',g={'cyborg'}},
+    ['content/fac_cyborgs/emplacements/cyborg_emplacement_mg/cyborg_emplacement_mg']={m=7,o={7},t='2C1A7790C435FD67',g={'cyborg'}},
+    ['content/fac_cyborgs/equipment/attachment/lieutenant_flag/lieutenant_flag']={m=13,o={9,10,11,12,13},t='8FC2784308E9BA99',p='cyborg',r=3},
+    ['content/fac_cyborgs/equipment/backpacks/conscript_backpack_lmg/conscript_backpack_lmg']={m=10,o={9,10},t='426B3DF007BE9F18',p='cyborg',r=3},
+    ['content/fac_cyborgs/equipment/backpacks/conscript_jumppack/conscript_jumppack']={m=6,o={6},t='E2E62FDD39407FE3',p='cyborg',r=3},
+    ['content/fac_cyborgs/equipment/backpacks/lieutenant_jetpack/lieutenant_jetpack']={m=9,o={8,9},t='B940C889D77F8219',p='cyborg',r=3},
+    ['content/fac_cyborgs/equipment/backpacks/soldier_jumppack/soldier_jumppack']={m=6,o={6},t='33B3E0CE8D179EEC',p='cyborg',r=3},
+    ['content/fac_cyborgs/equipment/weapons/conscript_cannon/conscript_cannon']={m=11,o={10,11},t='71B285B6D2B161C9',p='cyborg',r=3},
+    ['content/fac_cyborgs/equipment/weapons/conscript_flamer/conscript_flamer']={m=6,o={6},t='F4C0B6C9218FB571',p='cyborg',r=3},
+    ['content/fac_cyborgs/equipment/weapons/conscript_handgun/conscript_handgun']={m=10,o={9,10},t='CBCE5F5F0310EF15',p='cyborg',r=3},
+    ['content/fac_cyborgs/equipment/weapons/conscript_lmg/conscript_lmg']={m=14,o={10,11,12,13,14},t='68BA814FF35BF19C',p='cyborg',r=3},
+    ['content/fac_cyborgs/equipment/weapons/conscript_melee_claw/conscript_melee_claw']={m=11,o={10,11},t='2D1636F2EE8A6306',p='cyborg',r=3},
+    ['content/fac_cyborgs/equipment/weapons/conscript_smg/conscript_smg']={m=11,o={10,11},t='BCB3210CF8EF49D3',p='cyborg',r=3},
+    ['content/fac_cyborgs/equipment/weapons/lieutenant_cannon/lieutenant_cannon']={m=7,o={6,7},t='4D61156DD350A82B',p='cyborg',r=3},
+    ['content/fac_cyborgs/equipment/weapons/lieutenant_launcher/lieutenant_launcher']={m=7,o={6,7},t='7B5C9BDD385D0516',p='cyborg',r=3},
+    ['content/fac_cyborgs/equipment/weapons/lieutenant_saw/lieutenant_saw']={m=11,o={10,11},t='C89ED7AC3E425B25',p='cyborg',r=3},
+    ['content/fac_cyborgs/equipment/weapons/lieutenant_saw/lieutenant_saw_ivory_legion']={m=11,o={10,11},t='BB37F12D0F46690F',p='cyborg',r=3},
+    ['content/fac_cyborgs/equipment/weapons/soldier_chainsaw/soldier_chainsaw']={m=10,o={9,10},t='4FB6077F1597691D',p='cyborg',r=3},
+    ['content/fac_cyborgs/equipment/weapons/soldier_machinegun/soldier_machinegun']={m=5,o={5},t='2ED3696E12A14D4C',p='cyborg',r=3},
+    ['content/fac_cyborgs/equipment/weapons/soldier_riotgun/soldier_riotgun']={m=5,o={5},t='DFB610642EFF47D7',p='cyborg',r=3},
+    ['content/fac_cyborgs/equipment/weapons/soldier_shield/soldier_shield']={m=8,o={7,8},t='F96257FCAE258CAA',p='cyborg',r=3},
+    ['content/fac_cyborgs/equipment/weapons/soldier_shield/soldier_shield_ivory_legion']={m=8,o={7,8},t='FEB484EE972469F7',p='cyborg',r=3},
+    ['content/fac_cyborgs/equipment/weapons/soldier_standard_rifle/soldier_standard_rifle']={m=11,o={10,11},t='070BC8D3E18BB8F9',p='cyborg',r=3},
+    ['content/fac_cyborgs/turrets/cyborg_big_walker_turret_cannon/cyborg_big_walker_turret_cannon']={m=11,o={10,11},t='843D18D4B5512B63',p='cyborg_vehicle',r=10},
+    ['content/fac_cyborgs/turrets/cyborg_tank_hull_hmg/cyborg_tank_hull_mg']={m=2,o={2},t='16023E554FEE830E',p='cyborg_vehicle',r=10},
+    ['content/fac_cyborgs/turrets/cyborg_tank_turret_autocannons/cyborg_tank_turret_autocannons']={m=12,o={10,11,12},t='49674794A165EDA8',p='cyborg_vehicle',r=10},
+    ['content/fac_cyborgs/turrets/cyborg_tank_turret_cannon/cyborg_tank_turret_cannon']={m=11,o={10,11},t='CECD6979CF7BB0F2',p='cyborg_vehicle',r=10},
+    ['content/fac_cyborgs/turrets/cyborg_tank_turret_rocketlauncher/cyborg_tank_turret_rocketlauncher']={m=11,o={10,11},t='5D142C3A73EBC634',p='cyborg_vehicle',r=10},
+    ['content/fac_cyborgs/turrets/cyborg_turret_command_bunker_hmg/cyborg_turret_command_bunker_hmg']={m=7,o={6,7},t='CD28A27A79BE53D5',g={'cyborg'}},
+    ['content/fac_cyborgs/turrets/cyborg_turret_small_autocannon/cyborg_turret_small_autocannon']={m=2,o={2},t='9926876B2375A1BB',g={'cyborg'}},
+    ['content/fac_cyborgs/vehicles/cyborg_assault_walker/cyborg_assault_walker']={m=21,o={20,21},t='EF570293245A17C2',g={'cyborg_vehicle','cyborg'}},
+    ['content/fac_cyborgs/vehicles/cyborg_dropship/cyborg_dropship']={m=17,o={16,17},t='DB90077E76FAA025',g={'cyborg_vehicle','cyborg'}},
+    ['content/fac_cyborgs/vehicles/cyborg_gunship/cyborg_gunship']={m=18,o={16,17,18},t='282EB766C1FFA6A1',g={'cyborg_vehicle','cyborg'}},
+    ['content/fac_cyborgs/vehicles/cyborg_siege_engine/cyborg_siege_engine']={m=61,o={56,57,58,59,60,61},t='BC242702FB46B7E7',g={'cyborg_vehicle','cyborg'}},
+    ['content/fac_cyborgs/vehicles/cyborg_spawner/cyborg_spawner']={m=23,o={22,23},t='D37E8D120D2836E3',g={'cyborg_vehicle','cyborg'}},
+    ['content/fac_cyborgs/vehicles/cyborg_tank/cyborg_tank']={m=11,o={10,11},t='00BCF8247A544CDC',g={'cyborg_vehicle','cyborg'}},
+    ['content/fac_cyborgs/vehicles/cyborg_walker_scout/cyborg_walker_scout']={m=21,o={19,20,21},t='F8131632AA867107',g={'cyborg_vehicle','cyborg'}},
+    ['content/fac_illuminate/cha_beamer_champion/cha_beamer_champion']={m=20,o={17,18,19,20},t='E8F19A0AA958E46D',g={'illuminate'}},
+    ['content/fac_illuminate/cha_bodyhorror_bladed/cha_bodyhorror_bladed']={m=20,o={19,20},t='CC188F0C80505C6C',g={'illuminate'}},
+    ['content/fac_illuminate/cha_bodyhorror_helmetguy/cha_bodyhorror_helmetguy']={m=16,o={16},t='905809A4C28D8A45',g={'illuminate'}},
+    ['content/fac_illuminate/cha_corrupted/cha_corrupted']={m=20,o={19,20},t='78E1497571012C47',g={'illuminate'}},
+    ['content/fac_illuminate/cha_corrupted/cha_corrupted_v2']={m=20,o={19,20},t='0ADC9F9173AD8E1D',g={'illuminate'}},
+    ['content/fac_illuminate/cha_corrupted/cha_corrupted_v3']={m=20,o={19,20},t='44458A2C52B002FB',g={'illuminate'}},
+    ['content/fac_illuminate/cha_exomech_melee/cha_exomech_melee']={m=71,o={70,71},t='20B9C7734DAEAD65',g={'illuminate'}},
+    ['content/fac_illuminate/cha_exomech_ranged/cha_exomech_ranged']={m=51,o={50,51},t='453FE22C634EB30F',g={'illuminate'}},
+    ['content/fac_illuminate/cha_illuminate_guy_staff/cha_illuminate_guy_staff']={m=18,o={17,18},t='DA40BB347C7447F2',g={'illuminate'}},
+    ['content/fac_illuminate/cha_illuminate_guy_staff/cha_illuminate_guy_staff_fake']={m=5,o={5},t='F1610AC48CDC5240',g={'illuminate'}},
+    ['content/fac_illuminate/cha_jet_champion/cha_jet_champion']={m=18,o={17,18},t='604A794EC45BB820',g={'illuminate'}},
+    ['content/fac_illuminate/cha_meatglue/cha_meatglue']={m=12,o={11,12},t='67DC32DCA4F02D33',g={'illuminate'}},
+    ['content/fac_illuminate/cha_observer/cha_observer']={m=10,o={9,10},t='AC60E78435098C9D',g={'illuminate'}},
+    ['content/fac_illuminate/cha_tripod/cha_tripod']={m=22,o={21,22},t='965EAE5A51ACDD4A',g={'illuminate'}},
+    ['content/fac_illuminate/equipment/weapons/beamer_champion_gun/beamer_champion_gun']={m=11,o={10,11},t='705362AD578943F6',p='illuminate',r=3},
+    ['content/fac_illuminate/equipment/weapons/helmetguy_cleaver/helmetguy_cleaver']={m=2,o={2},t='258BD988CD66C94B',p='illuminate',r=3},
+    ['content/fac_illuminate/equipment/weapons/jet_champion_rifle/jet_champion_rifle']={m=9,o={8,9},t='0CF9B9B95EDFEF81',p='illuminate',r=3},
+    ['content/fac_illuminate/equipment/weapons/pathfinder_lightspear/pathfinder_lightspear']={m=5,o={5},t='9C7EF47A463D5327',p='illuminate',r=3},
+    ['content/fac_illuminate/vehicles/armaments/illuminate_turret_warmachine/illuminate_turret_wm_cannon']={m=7,o={6,7},t='4E342031A9D5C4F9',p='warmachine',r=10},
+    ['content/fac_illuminate/vehicles/illuminate_attack_ship/illuminate_attack_ship']={m=23,o={20,21,22,23},t='19E18B46EC55D94A',g={'illuminate'}},
+    ['content/fac_illuminate/vehicles/illuminate_dropship/illuminate_dropship']={m=14,o={13,14},t='74E2285C01DA4F71',g={'illuminate'}},
+    ['content/fac_illuminate/vehicles/illuminate_war_machine/illuminate_war_machine']={m=16,o={15,16},t='F22D027B37BEF107',g={'warmachine','illuminate'}},}
+
+local TYPE={}
+for name,d in pairs(OUTLINE_UNITS) do TYPE[d.t]=name end
 
 local function finite(n) return type(n)=='number' and n==n and math.abs(n)<1e8 end
 local function log(line)
@@ -91,19 +163,22 @@ local lists={}            -- resource name -> units
 local list_next=0
 local mesh_ok={}          -- resource name -> true / false after the first check
 local hidden={}           -- unit -> true
-local deaths={}           -- pending death positions
+local deaths={}           -- pending {x,y,z,name,until}
+local now_t=0
 
 local function death_position(e)
     local p=e.position
     if type(p)~='table' and type(e.entity)=='table' and type(e.entity.position)=='function' then
         local ok,v=pcall(e.entity.position,e.entity);if ok then p=v end
     end
-    if type(p)=='table' and finite(p.x) and finite(p.y) and finite(p.z) then return {x=p.x,y=p.y,z=p.z} end
+    if type(p)=='table' and finite(p.x) and finite(p.y) and finite(p.z) then return p end
 end
 local function on_died(e)
-    if type(e)~='table' or e.avatar==true or e.enemy~=true then return end
+    if type(e)~='table' or e.avatar==true or not in_since then return end
+    local name=type(e.type)=='string' and TYPE[e.type:upper()] or nil
+    if e.enemy~=true and not name then return end
     local p=death_position(e)
-    if p and in_since then deaths[#deaths+1]=p end
+    if p then deaths[#deaths+1]={x=p.x,y=p.y,z=p.z,name=name,till=now_t+RETRY} end
 end
 local function reset()
     lists={};hidden={};deaths={};in_since=nil
@@ -124,15 +199,14 @@ local function connect(D)
     log('connected to HD2 Data Hub '..tostring(D.version))
 end
 
-local function refresh_lists(now)
-    if now<list_next then return end
-    list_next=now+REFRESH
+local function refresh_lists()
     local W=sr.Application.main_world()
-    if not W then return end
+    if not W then return false end
     for name in pairs(OUTLINE_UNITS) do
         local ok,list=pcall(sr.World.units_by_resource,W,name)
         lists[name]=(ok and type(list)=='table') and list or {}
     end
+    return true
 end
 local function check_meshes()
     for name,list in pairs(lists) do
@@ -149,46 +223,108 @@ local function check_meshes()
     end
 end
 local function v3(v) local V=sr.Vector3 return V.x(v),V.y(v),V.z(v) end
-local function nearest(p)
-    local best,bd,bn=nil,RADIUS2,nil
-    for name,list in pairs(lists) do
-        for _,u in ipairs(list) do
-            if not hidden[u] then
-                local ok,x,y,z=pcall(function()
-                    if not sr.Unit.alive(u) then return nil end
-                    return v3(sr.Unit.world_position(u,1))
-                end)
-                if ok and finite(x) then
-                    local d2=(x-p.x)^2+(y-p.y)^2+(z-p.z)^2
-                    if d2<bd then best,bd,bn=u,d2,name end
+local function pos(u)
+    local ok,x,y,z=pcall(function()
+        if not sr.Unit.alive(u) then return nil end
+        return v3(sr.Unit.world_position(u,1))
+    end)
+    if ok and finite(x) then return x,y,z end
+end
+local function hide(u,name)
+    if hidden[u] or not mesh_ok[name] then return false end
+    for _,i in ipairs(OUTLINE_UNITS[name].o) do
+        local ok,err=pcall(sr.Unit.set_mesh_visibility,u,i,false)
+        if not ok then report('set_mesh_visibility: '..tostring(err));return false end
+    end
+    hidden[u]=true
+    return true
+end
+local function nearest_in(name,p,best,bd,bn)
+    for _,u in ipairs(lists[name] or {}) do
+        if not hidden[u] then
+            local x,y,z=pos(u)
+            if x then
+                local d2=(x-p.x)^2+(y-p.y)^2+(z-p.z)^2
+                if d2<bd then best,bd,bn=u,d2,name end
+            end
+        end
+    end
+    return best,bd,bn
+end
+local function match(p)
+    if p.name then
+        local u,_,n=nearest_in(p.name,p,nil,TYPED_R2,nil)
+        return u,n
+    end
+    local u,bd,bn=nil,ANY_R2,nil
+    for name,d in pairs(OUTLINE_UNITS) do
+        if d.g then u,bd,bn=nearest_in(name,p,u,bd,bn) end
+    end
+    return u,bn
+end
+
+-- attachments: dark when the nearest body of their parent group is a dead (hidden) one
+local function attachment_pass()
+    local bodies={}            -- group -> {{x,y,z,dead}}
+    for name,d in pairs(OUTLINE_UNITS) do
+        if d.g then
+            for _,u in ipairs(lists[name] or {}) do
+                local x,y,z=pos(u)
+                if x then
+                    local b={x,y,z,hidden[u]==true}
+                    for _,g in ipairs(d.g) do
+                        local t=bodies[g];if not t then t={};bodies[g]=t end
+                        t[#t+1]=b
+                    end
                 end
             end
         end
     end
-    return best,bn
-end
-local function hide(u,name)
-    if not mesh_ok[name] then return end
-    for _,i in ipairs(OUTLINE_UNITS[name].o) do
-        local ok,err=pcall(sr.Unit.set_mesh_visibility,u,i,false)
-        if not ok then report('set_mesh_visibility: '..tostring(err));return end
-    end
-    hidden[u]=true
-end
-local function work(now)
-    refresh_lists(now)
-    check_meshes()
-    if #deaths>0 then
-        local list=deaths;deaths={}
-        for _,p in ipairs(list) do
-            local u,name=nearest(p)
-            if u then hide(u,name) end
+    for name,d in pairs(OUTLINE_UNITS) do
+        local group=d.p and bodies[d.p]
+        if group and mesh_ok[name] then
+            local r2=d.r*d.r
+            for _,u in ipairs(lists[name] or {}) do
+                if not hidden[u] then
+                    local x,y,z=pos(u)
+                    if x then
+                        local best,bd=nil,r2
+                        for _,b in ipairs(group) do
+                            local d2=(b[1]-x)^2+(b[2]-y)^2+(b[3]-z)^2
+                            if d2<bd then best,bd=b,d2 end
+                        end
+                        if best and best[4] then hide(u,name) end
+                    end
+                end
+            end
         end
     end
 end
 
+local function work(now)
+    local fresh=false
+    if now>=list_next then
+        list_next=now+REFRESH
+        fresh=refresh_lists()
+        check_meshes()
+    end
+    if #deaths>0 then
+        local list=deaths;deaths={}
+        for _,p in ipairs(list) do
+            local u,name=match(p)
+            if u then
+                hide(u,name)
+            elseif now<p.till then
+                deaths[#deaths+1]=p
+            end
+        end
+    end
+    if fresh then attachment_pass() end
+end
+
 local function tick()
     local now=os.clock()
+    now_t=now
     local D=rawget(_G,'HD2Data')
     if type(D)~='table' or type(D.ready)~='function' or not D.ready() then
         if hub then clear_subscriptions();hub=nil;reset() end
