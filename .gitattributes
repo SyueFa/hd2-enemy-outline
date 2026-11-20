@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.lua text eol=lf
+*.py text eol=lf
+*.main binary
+*.gpu binary
+*.stream binary
+*.dl_bin binary

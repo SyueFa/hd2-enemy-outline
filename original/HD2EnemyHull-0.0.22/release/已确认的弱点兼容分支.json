@@ -1,0 +1,239 @@
+{
+  "user_confirmed": true,
+  "selection_policy": "User explicitly confirmed all regular unit options enabled and first mutually-exclusive branch; ScoutStrider default and Wretch body retain ordinary model.",
+  "selected_branches": [
+    {
+      "group": "[Terminid] 兼容描边 · Hunter Head",
+      "original_option": "Hunter Head",
+      "confirmed_branch": "Hunter Head",
+      "unit_ids": [
+        "a478d36a62a861f4",
+        "c28b3482e73d1ea9",
+        "d7e2c78b1ef4a8e1"
+      ],
+      "source_option_patch": "OutlineCompat/Mods/Hunter/9ba626afa44a3aa3.patch_0"
+    },
+    {
+      "group": "[Terminid] 兼容描边 · Warrior Head",
+      "original_option": "Warrior Head",
+      "confirmed_branch": "Warrior Head",
+      "unit_ids": [
+        "09872e66d1276e1f",
+        "10081acef6163ef6",
+        "1baeef36a88ae579",
+        "be39e313a1e46bb9"
+      ],
+      "source_option_patch": "OutlineCompat/Mods/Warrior/9ba626afa44a3aa3.patch_0"
+    },
+    {
+      "group": "[Terminid] 兼容描边 · Hive Guard ------------ [Head / Disable]",
+      "original_option": "Hive Guard ------------ [Head / Disable]",
+      "confirmed_branch": "Head Lockon",
+      "unit_ids": [
+        "a1f37bf2a40fbde4"
+      ],
+      "source_option_patch": "OutlineCompat/Mods/Hiveguard/Head/9ba626afa44a3aa3.patch_0"
+    },
+    {
+      "group": "[Terminid] 兼容描边 · Commander ------------- [Head / Disable]",
+      "original_option": "Commander ------------- [Head / Disable]",
+      "confirmed_branch": "Head Lockon",
+      "unit_ids": [
+        "d522fd4748d443a5",
+        "f79cd8bb654397df"
+      ],
+      "source_option_patch": "OutlineCompat/Mods/Commander/Head/9ba626afa44a3aa3.patch_0"
+    },
+    {
+      "group": "[Terminid] 兼容描边 · Spewer Head",
+      "original_option": "Spewer Head",
+      "confirmed_branch": "Spewer Head",
+      "unit_ids": [
+        "36aa99cce5e60146",
+        "cc7022fdd172089b",
+        "ccae5264acd591b7"
+      ],
+      "source_option_patch": "OutlineCompat/Mods/Spewer/9ba626afa44a3aa3.patch_0"
+    },
+    {
+      "group": "[Terminid] 兼容描边 · Stalker Head",
+      "original_option": "Stalker Head",
+      "confirmed_branch": "Stalker Head",
+      "unit_ids": [
+        "f540ca9d9d4a422e"
+      ],
+      "source_option_patch": "OutlineCompat/Mods/Stalker/9ba626afa44a3aa3.patch_0"
+    },
+    {
+      "group": "[Terminid] 兼容描边 · Charger ------------ [Head / Left Front Leg]",
+      "original_option": "Charger ------------ [Head / Left Front Leg]",
+      "confirmed_branch": "Head Lockon",
+      "unit_ids": [
+        "1a7fcdff98c664b0",
+        "3aff5fd7d5450b99",
+        "6b202392f4ab605e"
+      ],
+      "source_option_patch": "OutlineCompat/Mods/Charger/Head/9ba626afa44a3aa3.patch_0"
+    },
+    {
+      "group": "[Terminid] 兼容描边 · Impaler Head",
+      "original_option": "Impaler Head",
+      "confirmed_branch": "Impaler Head",
+      "unit_ids": [
+        "dcf8e74212fbee3b"
+      ],
+      "source_option_patch": "OutlineCompat/Mods/Impaler/9ba626afa44a3aa3.patch_0"
+    },
+    {
+      "group": "[Terminid] 兼容描边 · Titan Head",
+      "original_option": "Titan Head",
+      "confirmed_branch": "Titan Head",
+      "unit_ids": [
+        "9e2e17f2ccccafdd"
+      ],
+      "source_option_patch": "OutlineCompat/Mods/Titan/9ba626afa44a3aa3.patch_0"
+    },
+    {
+      "group": "[Terminid] 兼容描边 · Dragonroach Head",
+      "original_option": "Dragonroach Head",
+      "confirmed_branch": "Dragonroach Head",
+      "unit_ids": [
+        "960b48a421a3faaa"
+      ],
+      "source_option_patch": "OutlineCompat/Mods/Dragonroach/9ba626afa44a3aa3.patch_0"
+    },
+    {
+      "group": "[Automaton] 兼容描边 · Trooper head",
+      "original_option": "Trooper head",
+      "confirmed_branch": "Trooper head",
+      "unit_ids": [
+        "64ba5f030b114ec1",
+        "9f57782f00e6ed20",
+        "a71aafd82c6ebc92",
+        "b2b3056bdf28e57b"
+      ],
+      "source_option_patch": "OutlineCompat/Mods/Trooper/9ba626afa44a3aa3.patch_0"
+    },
+    {
+      "group": "[Automaton] 兼容描边 · Berserker head",
+      "original_option": "Berserker head",
+      "confirmed_branch": "Berserker head",
+      "unit_ids": [
+        "a6a68d8af177f3a1"
+      ],
+      "source_option_patch": "OutlineCompat/Mods/Berserker/9ba626afa44a3aa3.patch_0"
+    },
+    {
+      "group": "[Automaton] 兼容描边 · Devastator Head",
+      "original_option": "Devastator Head",
+      "confirmed_branch": "Devastator Head",
+      "unit_ids": [
+        "3d9c95bd03c0c7cf",
+        "ae63e525853d7044",
+        "db7139323c40ae6f"
+      ],
+      "source_option_patch": "OutlineCompat/Mods/Devastator/9ba626afa44a3aa3.patch_0"
+    },
+    {
+      "group": "[Automaton] 兼容描边 · Hulk Head",
+      "original_option": "Hulk Head",
+      "confirmed_branch": "Hulk Head",
+      "unit_ids": [
+        "846bc06c6b213a06",
+        "b16493b009eec762"
+      ],
+      "source_option_patch": "OutlineCompat/Mods/HulkEye/9ba626afa44a3aa3.patch_0"
+    },
+    {
+      "group": "[Automaton] 兼容描边 · War Strider ------------- [L Hip Joint / Eye]",
+      "original_option": "War Strider ------------- [L Hip Joint / Eye]",
+      "confirmed_branch": "L Hip Joint Lockon",
+      "unit_ids": [
+        "ef570293245a17c2"
+      ],
+      "source_option_patch": "OutlineCompat/Mods/WarStrider/LHipJoint/9ba626afa44a3aa3.patch_0"
+    },
+    {
+      "group": "[Automaton] 兼容描边 · Factory Strider Eye",
+      "original_option": "Factory Strider Eye",
+      "confirmed_branch": "Factory Strider Eye",
+      "unit_ids": [
+        "d37e8d120d2836e3"
+      ],
+      "source_option_patch": "OutlineCompat/Mods/FactoryStrider/9ba626afa44a3aa3.patch_0"
+    },
+    {
+      "group": "[Automaton] 兼容描边 · Radical / Agitator Head",
+      "original_option": "Radical / Agitator Head",
+      "confirmed_branch": "Radical / Agitator Head",
+      "unit_ids": [
+        "746a7f3beda32699",
+        "9f44121c554dae89"
+      ],
+      "source_option_patch": "OutlineCompat/Mods/RadicalAgitator/9ba626afa44a3aa3.patch_0"
+    },
+    {
+      "group": "[Illuminate] 兼容描边 · Voteless Head",
+      "original_option": "Voteless Head",
+      "confirmed_branch": "Voteless Head",
+      "unit_ids": [
+        "0adc9f9173ad8e1d",
+        "44458a2c52b002fb",
+        "78e1497571012c47"
+      ],
+      "source_option_patch": "OutlineCompat/Mods/Voteless/9ba626afa44a3aa3.patch_0"
+    },
+    {
+      "group": "[Illuminate] 兼容描边 · Overseer Head",
+      "original_option": "Overseer Head",
+      "confirmed_branch": "Overseer Head",
+      "unit_ids": [
+        "604a794ec45bb820",
+        "da40bb347c7447f2",
+        "e8f19a0aa958e46d"
+      ],
+      "source_option_patch": "OutlineCompat/Mods/Overseer/9ba626afa44a3aa3.patch_0"
+    },
+    {
+      "group": "[Illuminate] 兼容描边 · Harvester ------------- [ Right Hip Joint / Eye ]",
+      "original_option": "Harvester ------------- [ Right Hip Joint / Eye ]",
+      "confirmed_branch": "Right Leg Joint Lock on",
+      "unit_ids": [
+        "965eae5a51acdd4a"
+      ],
+      "source_option_patch": "OutlineCompat/Mods/Harvester/RLeg/9ba626afa44a3aa3.patch_0"
+    },
+    {
+      "group": "[Illuminate] 兼容描边 · Crusher Head",
+      "original_option": "Crusher Head",
+      "confirmed_branch": "Crusher Head",
+      "unit_ids": [
+        "905809a4c28d8a45"
+      ],
+      "source_option_patch": "OutlineCompat/Mods/Crusher/9ba626afa44a3aa3.patch_0"
+    }
+  ],
+  "ordinary_default_fallbacks": [
+    {
+      "group": "[Automaton] 兼容描边 · Scout Strider ----------- [Enable / Disable]",
+      "unit_ids": [
+        "f8131632aa867107"
+      ],
+      "reason": "User-confirmed first source branch supplies no replacement model."
+    },
+    {
+      "group": "[Illuminate] 兼容描边 · Wretch -------------------- [Body / Head]",
+      "unit_ids": [
+        "cc188f0c80505c6c"
+      ],
+      "reason": "User-confirmed first source branch supplies no replacement model."
+    }
+  ],
+  "version021_exception": {
+    "unit": "e8f19a0aa958e46d",
+    "name": "新月监视者 / Crescent Overseer",
+    "choice": "Current native model, rig and physics plus hull; original lock point restored.",
+    "explicitly_approved_by_user": true,
+    "all_other_choices_preserved": true
+  }
+}

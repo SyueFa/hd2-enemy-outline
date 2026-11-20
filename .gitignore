@@ -1,0 +1,12 @@
+# build output
+build/
+dist/
+*.zip
+# loose game archives (the original mod is kept unpacked under original/)
+*.patch_0
+*.patch_0.gpu_resources
+*.patch_0.stream
+*.dl_bin
+!original/**/*.dl_bin
+__pycache__/
+*.pyc
