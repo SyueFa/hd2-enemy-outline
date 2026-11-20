@@ -1,31 +1,38 @@
 -- HD2-Addon: mods/combat/enemy_outline_off
--- 敵人描邊(死亡自動關閉) 1.2
--- 1.2: + 4 recovered names (scout walker HMG, top turret MG, gunship turret, flamer backpack); 116 resources.
+-- 敵人描邊(死亡自動關閉) 1.3
 -- Hides the HD2EnemyHull outline of an enemy when it dies.
 -- Needs MDL3 + stock HD2 Data Hub 0.6.6 + HD2EnemyHull outline models (same package).
 --
--- 1.1:
---  * The death event's entity type is the unit resource hash, so a typed death only
---    searches units of that exact resource (radius 4 m). Untyped deaths fall back to
---    the nearest outlined body within 1 m.
---  * Deaths of units the Hub marks kill=false (Impaler, tentacles, turrets, emplacements)
---    are no longer ignored when their type is in the outline table.
---  * Unmatched deaths are retried for 1.5 s.
---  * Attachments (weapons, backpacks, shields, tank/walker turrets, tongues, Impaler
---    tentacles) go dark when the nearest body of their parent group is a dead one.
---  * Mesh tables re-read from each unit's mesh list (fixes Dragonroach, Overseer jet,
---    Hunter tier3, Hulk assault, Fleshmob, Illuminate turrets).
---  * 112 resources (was 53): Iron Fleet, Ivory Legion, Gloom variants, tanks,
---    dropships, gunships, walkers, war machine, etc.
+-- How the dead unit is found (1.3):
+--  1. Position history: every outlined unit's position is sampled each frame (last ~1 s).
+--     The Hub reports where the enemy was at the moment it died (in the Hub's own clock);
+--     the delivery lag is measured (mission().now - event.time) and each candidate is
+--     compared at that moment, not where it is now. Fast movers and ragdolls no longer
+--     pull the match onto a neighbour.
+--  2. Damage tracking: every hit (entity_damaged) votes for the unit that was at the hit
+--     position at the time of the hit, but only when that unit is clearly the closest.
+--     On death, the unit with the most votes for that entity wins.
+--  3. Only units of the dead entity's own type are considered (type = unit resource hash).
+--     Untyped deaths fall back to any outlined body within 1 m.
+--  Attachments (weapons, backpacks, turrets, tongues, tentacles) follow their body.
 
 local OWNER = 'mods/combat/enemy_outline_off'
-local VERSION = '1.2'
+local VERSION = '1.3'
 local sr = rawget(_G, 'stingray')
 if type(sr) ~= 'table' then return {version=VERSION, error='no stingray'} end
 
 local SETTLE = 3          -- seconds after the mission starts before touching units
-local TYPED_R2 = 16.0     -- typed death: same resource within 4 m
-local ANY_R2 = 1.0        -- untyped death: any outlined body within 1 m
+local TYPED_R = 2.0       -- typed death: max distance at the moment of death (m)
+local LONE_R = 4.0        -- ... or within 4 m when it is the only one around
+local LONE_MARGIN = 3.0   -- (next of that type at least 3 m further)
+local VOTE_R = 3.0        -- voted unit must be within this at the moment of death (m)
+local ANY_R = 1.0         -- untyped death: any outlined body within 1 m
+local HIT_R = 1.0         -- a hit votes only if the closest unit is within 1 m ...
+local HIT_MARGIN = 0.5    -- ... and the second closest is at least 0.5 m further
+local HIT_GAP = 0.2       -- one vote per entity per 0.2 s
+local WINDOW = 0.15       -- history samples within +-0.15 s of the event time
+local HISTORY = 1.2       -- seconds of position history kept
+local MAX_LAG = 1.0
 local RETRY = 1.5         -- seconds an unmatched death is retried
 local REFRESH = 1         -- seconds between unit list refreshes / attachment pass
 
@@ -165,29 +172,60 @@ local function report(err) err=tostring(err);if err~=last_error then last_error=
 local function short(name) return name:match('([^/]+)$') or name end
 
 local hub,subs,epoch,in_since=nil,{},nil,nil
+local clock=0             -- game time, accumulated from update(dt)
 local lists={}            -- resource name -> units
+local owner_of={}         -- unit -> resource name
 local list_next=0
 local mesh_ok={}          -- resource name -> true / false after the first check
 local hidden={}           -- unit -> true
-local deaths={}           -- pending {x,y,z,name,until}
-local now_t=0
+local hist={}             -- unit -> {n=, i=, t={}, x={}, y={}, z={}}
+local deaths={}           -- pending deaths
+local hits={}             -- pending hits
+local votes={}            -- entity id -> {unit -> count}
+local last_vote={}        -- entity id -> clock
+local HN=90               -- ring size (>= 1.2 s at 75 fps)
 
-local function death_position(e)
-    local p=e.position
-    if type(p)~='table' and type(e.entity)=='table' and type(e.entity.position)=='function' then
-        local ok,v=pcall(e.entity.position,e.entity);if ok then p=v end
+local function event_time(e)
+    -- the event's moment in our clock: now minus the Hub's delivery lag
+    local lag=0
+    if hub and type(e.time)=='number' then
+        local ok,m=pcall(hub.mission)
+        if ok and type(m)=='table' and type(m.now)=='number' then lag=m.now-e.time end
     end
+    if not finite(lag) or lag<0 then lag=0 elseif lag>MAX_LAG then lag=MAX_LAG end
+    return clock-lag
+end
+local function event_position(p)
     if type(p)=='table' and finite(p.x) and finite(p.y) and finite(p.z) then return p end
+end
+local function type_name(e)
+    return type(e.type)=='string' and TYPE[e.type:upper()] or nil
 end
 local function on_died(e)
     if type(e)~='table' or e.avatar==true or not in_since then return end
-    local name=type(e.type)=='string' and TYPE[e.type:upper()] or nil
+    local name=type_name(e)
     if e.enemy~=true and not name then return end
-    local p=death_position(e)
-    if p then deaths[#deaths+1]={x=p.x,y=p.y,z=p.z,name=name,till=now_t+RETRY} end
+    local p=event_position(e.position)
+    if not p and type(e.entity)=='table' and type(e.entity.position)=='function' then
+        local ok,v=pcall(e.entity.position,e.entity);if ok then p=event_position(v) end
+    end
+    if p then
+        deaths[#deaths+1]={x=p.x,y=p.y,z=p.z,name=name,id=e.entity_id,t=event_time(e),till=clock+RETRY}
+    end
+end
+local function on_damaged(e)
+    if type(e)~='table' or e.avatar==true or not in_since then return end
+    local id=e.entity_id
+    local name=type_name(e)
+    if not name or type(id)~='number' then return end
+    if last_vote[id] and clock-last_vote[id]<HIT_GAP then return end
+    local p=type(e.entity)=='table' and event_position(e.entity.pos)
+    if not p then return end
+    last_vote[id]=clock
+    if #hits<200 then hits[#hits+1]={x=p.x,y=p.y,z=p.z,name=name,id=id,t=event_time(e)} end
 end
 local function reset()
-    lists={};hidden={};deaths={};in_since=nil
+    lists={};owner_of={};hidden={};hist={};deaths={};hits={};votes={};last_vote={};in_since=nil
 end
 local function clear_subscriptions()
     for _,s in pairs(subs) do if s and type(s.unsubscribe)=='function' then pcall(s.unsubscribe,s) end end
@@ -196,7 +234,7 @@ end
 local function connect(D)
     clear_subscriptions()
     hub=D
-    for ev,fn in pairs({entity_died=on_died,mission_started=reset,mission_ended=reset}) do
+    for ev,fn in pairs({entity_died=on_died,entity_damaged=on_damaged,mission_started=reset,mission_ended=reset}) do
         local s=D.on(ev,function(e) local ok,err=pcall(fn,e);if not ok then report(ev..': '..tostring(err)) end end,
             {owner=OWNER,id=ev})
         if not s then error('subscription unavailable: '..ev) end
@@ -208,10 +246,16 @@ end
 local function refresh_lists()
     local W=sr.Application.main_world()
     if not W then return false end
+    local seen={}
     for name in pairs(OUTLINE_UNITS) do
         local ok,list=pcall(sr.World.units_by_resource,W,name)
-        lists[name]=(ok and type(list)=='table') and list or {}
+        list=(ok and type(list)=='table') and list or {}
+        lists[name]=list
+        for _,u in ipairs(list) do seen[u]=name end
     end
+    owner_of=seen
+    for u in pairs(hist) do if not seen[u] then hist[u]=nil end end
+    for u in pairs(hidden) do if not seen[u] then hidden[u]=nil end end
     return true
 end
 local function check_meshes()
@@ -236,6 +280,55 @@ local function pos(u)
     end)
     if ok and finite(x) then return x,y,z end
 end
+
+-- position history ----------------------------------------------------------------
+local function sample()
+    for u,name in pairs(owner_of) do
+        if not hidden[u] and mesh_ok[name]~=false then
+            local x,y,z=pos(u)
+            if x then
+                local h=hist[u]
+                if not h then h={n=0,i=0,t={},x={},y={},z={}};hist[u]=h end
+                local i=h.i%HN+1
+                h.i=i;if h.n<HN then h.n=h.n+1 end
+                h.t[i],h.x[i],h.y[i],h.z[i]=clock,x,y,z
+            end
+        end
+    end
+end
+-- squared distance between unit u and point p at time t (closest sample in the window;
+-- falls back to the sample nearest in time, then to the current position)
+local function dist2_at(u,p,t)
+    local h=hist[u]
+    local best,bt,bdt=nil,nil,math.huge
+    if h then
+        for k=1,h.n do
+            local dt=math.abs(h.t[k]-t)
+            local d2=(h.x[k]-p.x)^2+(h.y[k]-p.y)^2+(h.z[k]-p.z)^2
+            if dt<=WINDOW then
+                if not best or d2<best then best=d2 end
+            elseif dt<bdt then bt,bdt=d2,dt end
+        end
+    end
+    if best then return best end
+    if bt and bdt<=HISTORY then return bt end
+    local x,y,z=pos(u)
+    if x then return (x-p.x)^2+(y-p.y)^2+(z-p.z)^2 end
+end
+-- closest and second closest unit of resource `name` to p at time t
+local function rank(name,p,t)
+    local b1,d1,d2=nil,math.huge,math.huge
+    for _,u in ipairs(lists[name] or {}) do
+        if not hidden[u] then
+            local d=dist2_at(u,p,t)
+            if d then
+                if d<d1 then b1,d2,d1=u,d1,d elseif d<d2 then d2=d end
+            end
+        end
+    end
+    return b1,d1,d2
+end
+
 local function hide(u,name)
     if hidden[u] or not mesh_ok[name] then return false end
     for _,i in ipairs(OUTLINE_UNITS[name].o) do
@@ -245,33 +338,53 @@ local function hide(u,name)
     hidden[u]=true
     return true
 end
-local function nearest_in(name,p,best,bd,bn)
-    for _,u in ipairs(lists[name] or {}) do
-        if not hidden[u] then
-            local x,y,z=pos(u)
-            if x then
-                local d2=(x-p.x)^2+(y-p.y)^2+(z-p.z)^2
-                if d2<bd then best,bd,bn=u,d2,name end
-            end
+
+local function process_hits()
+    if #hits==0 then return end
+    local list=hits;hits={}
+    for _,h in ipairs(list) do
+        local u,d1,d2=rank(h.name,h,h.t)
+        if u and d1<=HIT_R*HIT_R and math.sqrt(d2)-math.sqrt(d1)>=HIT_MARGIN then
+            local v=votes[h.id];if not v then v={};votes[h.id]=v end
+            v[u]=(v[u] or 0)+1
         end
     end
-    return best,bd,bn
+end
+local function voted(id,name,p,t)
+    local v=id and votes[id]
+    if not v then return nil end
+    local best,bc=nil,0
+    for u,c in pairs(v) do
+        if c>bc and not hidden[u] and owner_of[u]==name then best,bc=u,c end
+    end
+    if best then
+        local d=dist2_at(best,p,t)
+        if d and d<=VOTE_R*VOTE_R then return best end
+    end
 end
 local function match(p)
     if p.name then
-        local u,_,n=nearest_in(p.name,p,nil,TYPED_R2,nil)
-        return u,n
+        local u=voted(p.id,p.name,p,p.t)
+        if u then return u,p.name end
+        local b,d1,d2=rank(p.name,p,p.t)
+        if b and d1<=TYPED_R*TYPED_R then return b,p.name end
+        -- a lone unit of that type a bit further out (big bodies) is still unambiguous
+        if b and d1<=LONE_R*LONE_R and math.sqrt(d2)-math.sqrt(d1)>=LONE_MARGIN then return b,p.name end
+        return nil
     end
-    local u,bd,bn=nil,ANY_R2,nil
+    local bu,bd,bn=nil,ANY_R*ANY_R,nil
     for name,d in pairs(OUTLINE_UNITS) do
-        if d.g then u,bd,bn=nearest_in(name,p,u,bd,bn) end
+        if d.g then
+            local u,d1=rank(name,p,p.t)
+            if u and d1<bd then bu,bd,bn=u,d1,name end
+        end
     end
-    return u,bn
+    return bu,bn
 end
 
 -- attachments: dark when the nearest body of their parent group is a dead (hidden) one
 local function attachment_pass()
-    local bodies={}            -- group -> {{x,y,z,dead}}
+    local bodies={}
     for name,d in pairs(OUTLINE_UNITS) do
         if d.g then
             for _,u in ipairs(lists[name] or {}) do
@@ -307,30 +420,34 @@ local function attachment_pass()
     end
 end
 
-local function work(now)
+local function work()
     local fresh=false
-    if now>=list_next then
-        list_next=now+REFRESH
+    if clock>=list_next then
+        list_next=clock+REFRESH
         fresh=refresh_lists()
         check_meshes()
     end
+    sample()
+    process_hits()
     if #deaths>0 then
         local list=deaths;deaths={}
         for _,p in ipairs(list) do
             local u,name=match(p)
             if u then
                 hide(u,name)
-            elseif now<p.till then
+                if p.id then votes[p.id]=nil;last_vote[p.id]=nil end
+            elseif clock<p.till then
                 deaths[#deaths+1]=p
+            elseif p.id then
+                votes[p.id]=nil;last_vote[p.id]=nil
             end
         end
     end
     if fresh then attachment_pass() end
 end
 
-local function tick()
-    local now=os.clock()
-    now_t=now
+local function tick(dt)
+    if type(dt)=='number' and dt>0 and dt<1 then clock=clock+dt end
     local D=rawget(_G,'HD2Data')
     if type(D)~='table' or type(D.ready)~='function' or not D.ready() then
         if hub then clear_subscriptions();hub=nil;reset() end
@@ -345,15 +462,15 @@ local function tick()
     if epoch and m.epoch~=epoch then reset() end
     epoch=m.epoch
     if not m.in_mission then if in_since then reset() end;return end
-    if not in_since then in_since=now end
-    if now-in_since<SETTLE then deaths={};return end
-    local ok,err=pcall(work,now)
+    if not in_since then in_since=clock end
+    if clock-in_since<SETTLE then deaths={};hits={};return end
+    local ok,err=pcall(work)
     if not ok then report('work: '..tostring(err)) end
 end
 
 local original_update=rawget(_G,'update')
 update=function(dt,...)
-    local ok,err=pcall(tick)
+    local ok,err=pcall(tick,dt)
     if not ok then report('update: '..tostring(err)) end
     if type(original_update)=='function' then return original_update(dt,...) end
 end
