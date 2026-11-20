@@ -1,5 +1,6 @@
 -- HD2-Addon: mods/combat/enemy_outline_off
--- 敵人描邊(死亡自動關閉) 1.1
+-- 敵人描邊(死亡自動關閉) 1.2
+-- 1.2: + 4 recovered names (scout walker HMG, top turret MG, gunship turret, flamer backpack); 116 resources.
 -- Hides the HD2EnemyHull outline of an enemy when it dies.
 -- Needs MDL3 + stock HD2 Data Hub 0.6.6 + HD2EnemyHull outline models (same package).
 --
@@ -18,7 +19,7 @@
 --    dropships, gunships, walkers, war machine, etc.
 
 local OWNER = 'mods/combat/enemy_outline_off'
-local VERSION = '1.1'
+local VERSION = '1.2'
 local sr = rawget(_G, 'stingray')
 if type(sr) ~= 'table' then return {version=VERSION, error='no stingray'} end
 
@@ -142,7 +143,12 @@ local OUTLINE_UNITS={
     ['content/fac_illuminate/vehicles/armaments/illuminate_turret_warmachine/illuminate_turret_wm_cannon']={m=7,o={6,7},t='4E342031A9D5C4F9',p='warmachine',r=10},
     ['content/fac_illuminate/vehicles/illuminate_attack_ship/illuminate_attack_ship']={m=23,o={20,21,22,23},t='19E18B46EC55D94A',g={'illuminate'}},
     ['content/fac_illuminate/vehicles/illuminate_dropship/illuminate_dropship']={m=14,o={13,14},t='74E2285C01DA4F71',g={'illuminate'}},
-    ['content/fac_illuminate/vehicles/illuminate_war_machine/illuminate_war_machine']={m=16,o={15,16},t='F22D027B37BEF107',g={'warmachine','illuminate'}},}
+    ['content/fac_illuminate/vehicles/illuminate_war_machine/illuminate_war_machine']={m=16,o={15,16},t='F22D027B37BEF107',g={'warmachine','illuminate'}},
+    ['content/fac_cyborgs/vehicles/armaments/wep_scoutwalker_hmg/wep_scoutwalker_hmg']={m=2,o={2},t='2A346BF4552997E2',p='cyborg_vehicle',r=10},
+    ['content/fac_cyborgs/vehicles/armaments/cyborg_top_turret_mg/cyborg_top_turret_mg']={m=13,o={11,12,13},t='48C91E42B9F16512',p='cyborg_vehicle',r=10},
+    ['content/fac_cyborgs/equipment/backpacks/conscript_backpack_flamer/conscript_backpack_flamer']={m=11,o={10,11},t='57F11209295752B5',p='cyborg',r=3},
+    ['content/fac_cyborgs/vehicles/armaments/cyborg_gunship_turret/cyborg_gunship_turret']={m=8,o={7,8},t='2D62A25F36C08F33',p='cyborg_vehicle',r=10},
+}
 
 local TYPE={}
 for name,d in pairs(OUTLINE_UNITS) do TYPE[d.t]=name end
