@@ -1,5 +1,17 @@
 -- HD2-Addon: mods/combat/enemy_outline_off
--- 敵人描邊(死亡自動關閉) 1.3
+-- 敵人描邊(死亡自動關閉) 1.4
+-- 1.4: birth binding.
+--  * Every entity_spawned event (Hub entity id, type, spawn position) is bound to the Lua unit
+--    of that type that appeared at that spot at that moment; a death with a bound id hides
+--    exactly that unit. Hit votes can overrule a binding; unbound deaths use the 1.3 matching.
+--  * Entity types that are not a model resource (scavenger_tier_1, conscript_flamer,
+--    cyborg_tank_heavycannon, ...) are mapped to the outlined models in the same folder
+--    (68 types, from the Data Hub catalog + community hash lists).
+--  * Deaths the Hub never reports (health record gone, no corpse found): the unit is hidden when
+--    its Hub Entity has been invalid for 2 s and the unit is still listed and alive.
+--  * hide() checks Unit.alive first: touching a unit that is being destroyed crashed the game.
+--  * A short summary per mission goes to the MDL log (deaths by binding/vote/position, spawns,
+--    hits, game kill counter vs Hub deaths).
 -- Hides the HD2EnemyHull outline of an enemy when it dies.
 -- Needs MDL3 + stock HD2 Data Hub 0.6.6 + HD2EnemyHull outline models (same package).
 --
@@ -17,7 +29,7 @@
 --  Attachments (weapons, backpacks, turrets, tongues, tentacles) follow their body.
 
 local OWNER = 'mods/combat/enemy_outline_off'
-local VERSION = '1.3'
+local VERSION = '1.4'
 local sr = rawget(_G, 'stingray')
 if type(sr) ~= 'table' then return {version=VERSION, error='no stingray'} end
 
@@ -33,6 +45,14 @@ local HIT_GAP = 0.2       -- one vote per entity per 0.2 s
 local WINDOW = 0.15       -- history samples within +-0.15 s of the event time
 local HISTORY = 1.2       -- seconds of position history kept
 local MAX_LAG = 1.0
+local SPAWN_R = 2.0        -- spawn binding: unit within 2 m of the spawn position ...
+local SPAWN_MARGIN = 0.5   -- ... and the next new unit of that type at least 0.5 m further
+local SPAWN_WAIT = 2.0     -- seconds a spawn waits for its unit to appear
+local BORN_SLACK = 1.0     -- a unit counts as new if first seen at most 1 s before the spawn
+local BIND_R = 6.0         -- a bound unit must be within 6 m of the death position
+local EARLY_R = 4.0        -- early spawns (before/during settle): unit within 4 m ...
+local EARLY_MARGIN = 1.5   -- ... and the next unbound unit of that type 1.5 m further
+local OVERRULE = 3         -- hit votes overrule a binding when ahead by this many
 local RETRY = 1.5         -- seconds an unmatched death is retried
 local REFRESH = 1         -- seconds between unit list refreshes / attachment pass
 
@@ -157,8 +177,90 @@ local OUTLINE_UNITS={
     ['content/fac_cyborgs/vehicles/armaments/cyborg_gunship_turret/cyborg_gunship_turret']={m=8,o={7,8},t='2D62A25F36C08F33',p='cyborg_vehicle',r=10},
 }
 
-local TYPE={}
-for name,d in pairs(OUTLINE_UNITS) do TYPE[d.t]=name end
+-- entity type (Hub) -> outlined model resources it can use (same folder)
+local EXTRA_TYPES={
+    ['6021E22338333D88']={'content/fac_bugs/cha_boomer_nurser/cha_boomer_nurser'},
+    ['A05BD1EC67B3AC4C']={'content/fac_bugs/cha_charger/cha_charger'},
+    ['FD5247653C897803']={'content/fac_bugs/cha_charger_bull/cha_charger_bull'},
+    ['1F0A91729C0004E0']={'content/fac_bugs/cha_hunter/cha_hunter','content/fac_bugs/cha_hunter/cha_hunter_gloom_tier1','content/fac_bugs/cha_hunter/cha_hunter_tier3'},
+    ['3D0E03E2D574E1CA']={'content/fac_bugs/cha_hunter/cha_hunter','content/fac_bugs/cha_hunter/cha_hunter_gloom_tier1','content/fac_bugs/cha_hunter/cha_hunter_tier3'},
+    ['5CA832447445C0BA']={'content/fac_bugs/cha_hunter/cha_hunter','content/fac_bugs/cha_hunter/cha_hunter_gloom_tier1','content/fac_bugs/cha_hunter/cha_hunter_tier3'},
+    ['883401AF2A98A5F6']={'content/fac_bugs/cha_hunter/cha_hunter','content/fac_bugs/cha_hunter/cha_hunter_gloom_tier1','content/fac_bugs/cha_hunter/cha_hunter_tier3'},
+    ['D9511E9F6BD62E3F']={'content/fac_bugs/cha_hunter/cha_hunter','content/fac_bugs/cha_hunter/cha_hunter_gloom_tier1','content/fac_bugs/cha_hunter/cha_hunter_tier3'},
+    ['51EEA86BF6997E4E']={'content/fac_bugs/cha_scavenger/cha_scavenger','content/fac_bugs/cha_scavenger/cha_scavenger_captive','content/fac_bugs/cha_scavenger/cha_scavenger_gloom'},
+    ['8FF0A839830A7692']={'content/fac_bugs/cha_scavenger/cha_scavenger','content/fac_bugs/cha_scavenger/cha_scavenger_captive','content/fac_bugs/cha_scavenger/cha_scavenger_gloom'},
+    ['9A8A3AAE287B230C']={'content/fac_bugs/cha_scavenger/cha_scavenger','content/fac_bugs/cha_scavenger/cha_scavenger_captive','content/fac_bugs/cha_scavenger/cha_scavenger_gloom'},
+    ['DFBACBD977A948DC']={'content/fac_bugs/cha_scavenger/cha_scavenger','content/fac_bugs/cha_scavenger/cha_scavenger_captive','content/fac_bugs/cha_scavenger/cha_scavenger_gloom'},
+    ['F0B26FA9258128D3']={'content/fac_bugs/cha_shrieker/cha_shrieker'},
+    ['32541FC4EC7C9CDC']={'content/fac_bugs/cha_warrior/cha_warrior','content/fac_bugs/cha_warrior/cha_warrior_gloom_tier_1','content/fac_bugs/cha_warrior/cha_warrior_tier_1'},
+    ['4E97FB073BDC7A4B']={'content/fac_bugs/cha_warrior/cha_warrior','content/fac_bugs/cha_warrior/cha_warrior_gloom_tier_1','content/fac_bugs/cha_warrior/cha_warrior_tier_1'},
+    ['728421351D440EBC']={'content/fac_bugs/cha_warrior/cha_warrior','content/fac_bugs/cha_warrior/cha_warrior_gloom_tier_1','content/fac_bugs/cha_warrior/cha_warrior_tier_1'},
+    ['B2A6FA1E4284C7E6']={'content/fac_bugs/cha_warrior/cha_warrior','content/fac_bugs/cha_warrior/cha_warrior_gloom_tier_1','content/fac_bugs/cha_warrior/cha_warrior_tier_1'},
+    ['EACEE39FA017B495']={'content/fac_bugs/cha_warrior/cha_warrior','content/fac_bugs/cha_warrior/cha_warrior_gloom_tier_1','content/fac_bugs/cha_warrior/cha_warrior_tier_1'},
+    ['B5DBC0C240C921AD']={'content/fac_cyborgs/cha_berserker/cha_berserker','content/fac_cyborgs/cha_berserker/cha_berserker_iron_fleet'},
+    ['D5792F6856B06BA4']={'content/fac_cyborgs/cha_berserker/cha_berserker','content/fac_cyborgs/cha_berserker/cha_berserker_iron_fleet'},
+    ['0002BA767DF856F3']={'content/fac_cyborgs/cha_conscript/cha_conscript','content/fac_cyborgs/cha_conscript/cha_conscript_iron_fleet','content/fac_cyborgs/cha_conscript/cha_conscript_ivory_legion','content/fac_cyborgs/cha_conscript/cha_conscript_tier_2'},
+    ['089833D2880D9E06']={'content/fac_cyborgs/cha_conscript/cha_conscript','content/fac_cyborgs/cha_conscript/cha_conscript_iron_fleet','content/fac_cyborgs/cha_conscript/cha_conscript_ivory_legion','content/fac_cyborgs/cha_conscript/cha_conscript_tier_2'},
+    ['257D805CAA7E10C0']={'content/fac_cyborgs/cha_conscript/cha_conscript','content/fac_cyborgs/cha_conscript/cha_conscript_iron_fleet','content/fac_cyborgs/cha_conscript/cha_conscript_ivory_legion','content/fac_cyborgs/cha_conscript/cha_conscript_tier_2'},
+    ['30CF04B2EC8C9BD4']={'content/fac_cyborgs/cha_conscript/cha_conscript','content/fac_cyborgs/cha_conscript/cha_conscript_iron_fleet','content/fac_cyborgs/cha_conscript/cha_conscript_ivory_legion','content/fac_cyborgs/cha_conscript/cha_conscript_tier_2'},
+    ['4019623142351CB6']={'content/fac_cyborgs/cha_conscript/cha_conscript','content/fac_cyborgs/cha_conscript/cha_conscript_iron_fleet','content/fac_cyborgs/cha_conscript/cha_conscript_ivory_legion','content/fac_cyborgs/cha_conscript/cha_conscript_tier_2'},
+    ['52018DEB9AB6827E']={'content/fac_cyborgs/cha_conscript/cha_conscript','content/fac_cyborgs/cha_conscript/cha_conscript_iron_fleet','content/fac_cyborgs/cha_conscript/cha_conscript_ivory_legion','content/fac_cyborgs/cha_conscript/cha_conscript_tier_2'},
+    ['7B48CACDBACB3881']={'content/fac_cyborgs/cha_conscript/cha_conscript','content/fac_cyborgs/cha_conscript/cha_conscript_iron_fleet','content/fac_cyborgs/cha_conscript/cha_conscript_ivory_legion','content/fac_cyborgs/cha_conscript/cha_conscript_tier_2'},
+    ['7ECE5304F868F6B3']={'content/fac_cyborgs/cha_conscript/cha_conscript','content/fac_cyborgs/cha_conscript/cha_conscript_iron_fleet','content/fac_cyborgs/cha_conscript/cha_conscript_ivory_legion','content/fac_cyborgs/cha_conscript/cha_conscript_tier_2'},
+    ['82A87AD8D595B2BA']={'content/fac_cyborgs/cha_conscript/cha_conscript','content/fac_cyborgs/cha_conscript/cha_conscript_iron_fleet','content/fac_cyborgs/cha_conscript/cha_conscript_ivory_legion','content/fac_cyborgs/cha_conscript/cha_conscript_tier_2'},
+    ['856E9710E45E760F']={'content/fac_cyborgs/cha_conscript/cha_conscript','content/fac_cyborgs/cha_conscript/cha_conscript_iron_fleet','content/fac_cyborgs/cha_conscript/cha_conscript_ivory_legion','content/fac_cyborgs/cha_conscript/cha_conscript_tier_2'},
+    ['A4552F97033392F4']={'content/fac_cyborgs/cha_conscript/cha_conscript','content/fac_cyborgs/cha_conscript/cha_conscript_iron_fleet','content/fac_cyborgs/cha_conscript/cha_conscript_ivory_legion','content/fac_cyborgs/cha_conscript/cha_conscript_tier_2'},
+    ['AE57FCDB49F74E98']={'content/fac_cyborgs/cha_conscript/cha_conscript','content/fac_cyborgs/cha_conscript/cha_conscript_iron_fleet','content/fac_cyborgs/cha_conscript/cha_conscript_ivory_legion','content/fac_cyborgs/cha_conscript/cha_conscript_tier_2'},
+    ['AF0F9B3A163787A5']={'content/fac_cyborgs/cha_conscript/cha_conscript','content/fac_cyborgs/cha_conscript/cha_conscript_iron_fleet','content/fac_cyborgs/cha_conscript/cha_conscript_ivory_legion','content/fac_cyborgs/cha_conscript/cha_conscript_tier_2'},
+    ['B4ED319B39F5457B']={'content/fac_cyborgs/cha_conscript/cha_conscript','content/fac_cyborgs/cha_conscript/cha_conscript_iron_fleet','content/fac_cyborgs/cha_conscript/cha_conscript_ivory_legion','content/fac_cyborgs/cha_conscript/cha_conscript_tier_2'},
+    ['D8CBC4A807A6D035']={'content/fac_cyborgs/cha_conscript/cha_conscript','content/fac_cyborgs/cha_conscript/cha_conscript_iron_fleet','content/fac_cyborgs/cha_conscript/cha_conscript_ivory_legion','content/fac_cyborgs/cha_conscript/cha_conscript_tier_2'},
+    ['E683D2CA5618D74A']={'content/fac_cyborgs/cha_conscript/cha_conscript','content/fac_cyborgs/cha_conscript/cha_conscript_iron_fleet','content/fac_cyborgs/cha_conscript/cha_conscript_ivory_legion','content/fac_cyborgs/cha_conscript/cha_conscript_tier_2'},
+    ['FB9937035D652C43']={'content/fac_cyborgs/cha_conscript/cha_conscript','content/fac_cyborgs/cha_conscript/cha_conscript_iron_fleet','content/fac_cyborgs/cha_conscript/cha_conscript_ivory_legion','content/fac_cyborgs/cha_conscript/cha_conscript_tier_2'},
+    ['215CE160A17BE4CD']={'content/fac_cyborgs/cha_conscript_commander/cha_conscript_commander'},
+    ['09FE0BE51A23396C']={'content/fac_cyborgs/cha_cyborg_elite/cha_cyborg_elite_rusher','content/fac_cyborgs/cha_cyborg_elite/cha_elite_female'},
+    ['9D8827FED763650E']={'content/fac_cyborgs/cha_cyborg_elite/cha_cyborg_elite_rusher','content/fac_cyborgs/cha_cyborg_elite/cha_elite_female'},
+    ['CBB1BA3366009C3A']={'content/fac_cyborgs/cha_cyborg_elite/cha_cyborg_elite_rusher','content/fac_cyborgs/cha_cyborg_elite/cha_elite_female'},
+    ['137988CEA16458F7']={'content/fac_cyborgs/cha_lieutenant/cha_lieutenant'},
+    ['1897BDD32105D2DC']={'content/fac_cyborgs/cha_lieutenant/cha_lieutenant'},
+    ['1E66EE1F6F7FD00E']={'content/fac_cyborgs/cha_lieutenant/cha_lieutenant'},
+    ['32CDEADA234FB8DF']={'content/fac_cyborgs/cha_lieutenant/cha_lieutenant'},
+    ['3E0537D606438FEA']={'content/fac_cyborgs/cha_lieutenant/cha_lieutenant'},
+    ['6DAB2EADF5D8B692']={'content/fac_cyborgs/cha_lieutenant/cha_lieutenant'},
+    ['96BA14C9EBB49CE1']={'content/fac_cyborgs/cha_lieutenant/cha_lieutenant'},
+    ['E44EC9F9B3FE1D2A']={'content/fac_cyborgs/cha_lieutenant/cha_lieutenant'},
+    ['57EED0EAC346CD9D']={'content/fac_cyborgs/cha_soldier/cha_soldier','content/fac_cyborgs/cha_soldier/cha_soldier_heavy_weapon','content/fac_cyborgs/cha_soldier/cha_soldier_iron_fleet','content/fac_cyborgs/cha_soldier/cha_soldier_rocket'},
+    ['58B2B86C11369241']={'content/fac_cyborgs/cha_soldier/cha_soldier','content/fac_cyborgs/cha_soldier/cha_soldier_heavy_weapon','content/fac_cyborgs/cha_soldier/cha_soldier_iron_fleet','content/fac_cyborgs/cha_soldier/cha_soldier_rocket'},
+    ['9647B00CC3A9D36F']={'content/fac_cyborgs/cha_soldier/cha_soldier','content/fac_cyborgs/cha_soldier/cha_soldier_heavy_weapon','content/fac_cyborgs/cha_soldier/cha_soldier_iron_fleet','content/fac_cyborgs/cha_soldier/cha_soldier_rocket'},
+    ['B92435FBF60F0748']={'content/fac_cyborgs/cha_soldier/cha_soldier','content/fac_cyborgs/cha_soldier/cha_soldier_heavy_weapon','content/fac_cyborgs/cha_soldier/cha_soldier_iron_fleet','content/fac_cyborgs/cha_soldier/cha_soldier_rocket'},
+    ['BE743B2FAA3A6E26']={'content/fac_cyborgs/cha_soldier/cha_soldier','content/fac_cyborgs/cha_soldier/cha_soldier_heavy_weapon','content/fac_cyborgs/cha_soldier/cha_soldier_iron_fleet','content/fac_cyborgs/cha_soldier/cha_soldier_rocket'},
+    ['C9BCCCB0A54A82A4']={'content/fac_cyborgs/cha_soldier/cha_soldier','content/fac_cyborgs/cha_soldier/cha_soldier_heavy_weapon','content/fac_cyborgs/cha_soldier/cha_soldier_iron_fleet','content/fac_cyborgs/cha_soldier/cha_soldier_rocket'},
+    ['E0353177F1329573']={'content/fac_cyborgs/cha_soldier/cha_soldier','content/fac_cyborgs/cha_soldier/cha_soldier_heavy_weapon','content/fac_cyborgs/cha_soldier/cha_soldier_iron_fleet','content/fac_cyborgs/cha_soldier/cha_soldier_rocket'},
+    ['F66D0BAD8693779A']={'content/fac_cyborgs/cha_soldier/cha_soldier','content/fac_cyborgs/cha_soldier/cha_soldier_heavy_weapon','content/fac_cyborgs/cha_soldier/cha_soldier_iron_fleet','content/fac_cyborgs/cha_soldier/cha_soldier_rocket'},
+    ['F8B5A81A86D5D4EB']={'content/fac_cyborgs/cha_soldier/cha_soldier','content/fac_cyborgs/cha_soldier/cha_soldier_heavy_weapon','content/fac_cyborgs/cha_soldier/cha_soldier_iron_fleet','content/fac_cyborgs/cha_soldier/cha_soldier_rocket'},
+    ['FC8DEC78BE8AB47D']={'content/fac_cyborgs/cha_soldier/cha_soldier','content/fac_cyborgs/cha_soldier/cha_soldier_heavy_weapon','content/fac_cyborgs/cha_soldier/cha_soldier_iron_fleet','content/fac_cyborgs/cha_soldier/cha_soldier_rocket'},
+    ['98152772A72F7838']={'content/fac_cyborgs/vehicles/cyborg_dropship/cyborg_dropship'},
+    ['30F2DEE2333F227A']={'content/fac_cyborgs/vehicles/cyborg_spawner/cyborg_spawner'},
+    ['31BAE74D2F064D8D']={'content/fac_cyborgs/vehicles/cyborg_tank/cyborg_tank'},
+    ['53D8919D7B8ABD67']={'content/fac_cyborgs/vehicles/cyborg_tank/cyborg_tank'},
+    ['63DF3D07B7424588']={'content/fac_cyborgs/vehicles/cyborg_tank/cyborg_tank'},
+    ['C6449FFD9EA3779C']={'content/fac_cyborgs/vehicles/cyborg_tank/cyborg_tank'},
+    ['9076EEED17FCEE35']={'content/fac_cyborgs/vehicles/cyborg_walker_scout/cyborg_walker_scout'},
+    ['08E6FFC2474287BD']={'content/fac_illuminate/cha_illuminate_guy_staff/cha_illuminate_guy_staff','content/fac_illuminate/cha_illuminate_guy_staff/cha_illuminate_guy_staff_fake'},
+    ['D63FCBFF0851B7AF']={'content/fac_illuminate/cha_tripod/cha_tripod'},
+}
+local TYPE={}       -- entity type -> key
+local CANDS={}      -- key -> list of model resources
+local IN={}         -- key -> set of model resources
+for name,d in pairs(OUTLINE_UNITS) do TYPE[d.t]=name;CANDS[name]={name};IN[name]={[name]=true} end
+for t,list in pairs(EXTRA_TYPES) do
+    local ok={}
+    for _,r in ipairs(list) do if OUTLINE_UNITS[r] then ok[#ok+1]=r end end
+    if #ok>0 and not TYPE[t] then
+        TYPE[t]=t;CANDS[t]=ok;IN[t]={}
+        for _,r in ipairs(ok) do IN[t][r]=true end
+    end
+end
+local function owned(u,key,owner) local r=owner[u];return r~=nil and IN[key]~=nil and IN[key][r]==true end
 
 local function finite(n) return type(n)=='number' and n==n and math.abs(n)<1e8 end
 local function log(line)
@@ -183,6 +285,16 @@ local deaths={}           -- pending deaths
 local hits={}             -- pending hits
 local votes={}            -- entity id -> {unit -> count}
 local last_vote={}        -- entity id -> clock
+local spawns={}            -- pending spawn events
+local bind={}              -- entity id -> unit (birth binding)
+local bound={}             -- unit -> entity id
+local last_move={}         -- unit -> clock of its last movement > 0.3 m
+local last_pos={}          -- unit -> {x,y,z} at that movement
+local gone_since={}        -- entity id -> clock when its Hub entity was first seen invalid
+local ents={}              -- entity id -> Hub Entity handle (from spawn / hit events)
+local spawn_ids={}         -- entity id -> true for every spawn event received this mission
+local first_seen={}        -- unit -> clock when it first showed up in a unit list
+local stats={}
 local HN=90               -- ring size (>= 1.2 s at 75 fps)
 
 local function event_time(e)
@@ -202,15 +314,24 @@ local function type_name(e)
     return type(e.type)=='string' and TYPE[e.type:upper()] or nil
 end
 local function on_died(e)
+    if type(e)=='table' and in_since and e.avatar~=true then
+        stats.deaths_all=(stats.deaths_all or 0)+1
+        if e.local_killer==true then stats.deaths_mine=(stats.deaths_mine or 0)+1 end
+        if e.observed=='corpse' then stats.deaths_corpse=(stats.deaths_corpse or 0)+1 end
+    end
     if type(e)~='table' or e.avatar==true or not in_since then return end
     local name=type_name(e)
     if e.enemy~=true and not name then return end
+    if not name then
+        stats.untyped=stats.untyped or {}
+        local k=tostring(e.type);stats.untyped[k]=(stats.untyped[k] or 0)+1
+    end
     local p=event_position(e.position)
     if not p and type(e.entity)=='table' and type(e.entity.position)=='function' then
         local ok,v=pcall(e.entity.position,e.entity);if ok then p=event_position(v) end
     end
     if p then
-        deaths[#deaths+1]={x=p.x,y=p.y,z=p.z,name=name,id=e.entity_id,t=event_time(e),till=clock+RETRY}
+        deaths[#deaths+1]={x=p.x,y=p.y,z=p.z,name=name,id=e.entity_id,t=event_time(e),till=clock+RETRY,etype=e.type}
     end
 end
 local function on_damaged(e)
@@ -218,13 +339,83 @@ local function on_damaged(e)
     local id=e.entity_id
     local name=type_name(e)
     if not name or type(id)~='number' then return end
-    if last_vote[id] and clock-last_vote[id]<HIT_GAP then return end
+    stats.hit_rx=(stats.hit_rx or 0)+1
+    if last_vote[id] and clock-last_vote[id]<HIT_GAP then stats.hit_gap=(stats.hit_gap or 0)+1;return end
     local p=type(e.entity)=='table' and event_position(e.entity.pos)
-    if not p then return end
+    if not p then stats.hit_nopos=(stats.hit_nopos or 0)+1;return end
     last_vote[id]=clock
+    if not ents[id] then ents[id]=current_epoch_entity(e.entity) end
     if #hits<200 then hits[#hits+1]={x=p.x,y=p.y,z=p.z,name=name,id=id,t=event_time(e)} end
 end
-local function reset()
+local function current_epoch_entity(en)
+    if type(en)~='table' or type(en.is_valid)~='function' or not hub then return nil end
+    local ok,m=pcall(hub.mission)
+    if ok and type(m)=='table' and en.epoch~=nil and en.epoch==m.epoch then return en end
+end
+local function on_spawned(e)
+    if type(e)~='table' or e.avatar==true then return end
+    local name=type_name(e); local id=e.entity_id
+    if not name and e.enemy==true and in_since then
+        stats.untyped_spawn=stats.untyped_spawn or {}
+        local k=tostring(e.type);stats.untyped_spawn[k]=(stats.untyped_spawn[k] or 0)+1
+    end
+    if not name or type(id)~='number' then return end
+    stats.spawn_rx=(stats.spawn_rx or 0)+1
+    spawn_ids[id]=true
+    ents[id]=current_epoch_entity(e.entity) or ents[id]
+    local p=type(e.entity)=='table' and event_position(e.entity.pos)
+    if not p then return end
+    local early=(not in_since) or clock-in_since<SETTLE
+    if early then stats.spawn_early=(stats.spawn_early or 0)+1 end
+    if #spawns<600 then spawns[#spawns+1]={x=p.x,y=p.y,z=p.z,name=name,id=id,t=event_time(e),till=clock+SPAWN_WAIT,early=early,ep=type(e.entity)=='table' and e.entity.epoch or nil} end
+end
+local function on_kill(e)
+    if type(e)~='table' or not in_since then return end
+    local n=tonumber(e.kills) or 0
+    stats.kills_game=(stats.kills_game or 0)+n
+    stats.kill_src=stats.kill_src or {}
+    if type(e.sources)=='table' then
+        for _,src in ipairs(e.sources) do
+            local k=tostring(src.name or src.type or '?')
+            stats.kill_src[k]=(stats.kill_src[k] or 0)+(tonumber(src.kills) or 0)
+        end
+    end
+    if (tonumber(e.unattributed) or 0)>0 then stats.kill_src['(unattributed)']=(stats.kill_src['(unattributed)'] or 0)+e.unattributed end
+end
+local function new_stats() return {bind=0,vote=0,pos=0,miss=0,spawn_bound=0,spawn_open=0,overruled=0,far=0,
+    spawn_rx=0,spawn_early=0,hit_rx=0,hit_gap=0,hit_nopos=0,hit_vote=0,hit_none=0,hit_far=0,hit_amb=0,death_voted=0,hit_logged=0} end
+local function reset_stats_if_needed() if not stats.hit_logged then stats=new_stats() end end
+local function reset(keep_epoch)
+    if in_since and stats.bind then
+        log(string.format('mission summary: deaths bind=%d vote=%d position=%d missed=%d | spawns bound=%d unbound=%d | overruled=%d bound_too_far=%d',
+            stats.bind,stats.vote,stats.pos,stats.miss,stats.spawn_bound,stats.spawn_open,stats.overruled,stats.far))
+        log(string.format('mission detail: spawns received=%d early=%d early_bound=%d | hits received=%d rate_limited=%d no_pos=%d voted=%d no_unit=%d too_far=%d ambiguous=%d | deaths_with_votes=%d position_but_had_votes=%d',
+            stats.spawn_rx,stats.spawn_early,stats.early_bound or 0,stats.hit_rx,stats.hit_gap,stats.hit_nopos,stats.hit_vote,stats.hit_none,stats.hit_far,stats.hit_amb,stats.death_voted,stats.pos_voted or 0))
+        local w={}
+        for k,v in pairs(stats.why or {}) do w[#w+1]=k..'='..v end
+        table.sort(w)
+        log('mission detail: deaths not by binding because: '..(#w>0 and table.concat(w,' ') or '-'))
+        local function list(t) local r={} for k,v in pairs(t or {}) do r[#r+1]=k..'='..v end table.sort(r) return #r>0 and table.concat(r,' ') or '-' end
+        log('mission detail: no_spawn by type: '..list(stats.nospawn))
+        log('mission types: deaths of types not in the table: '..list(stats.untyped))
+        log('mission types: spawns of types not in the table: '..list(stats.untyped_spawn))
+        log('mission types: untyped death matched to model: '..list(stats.untyped_match))
+        local still=0
+        for u in pairs(bound) do if not hidden[u] and last_move[u] and clock-last_move[u]>30 then still=still+1 end end
+        log(string.format('mission check: game_kills(mine)=%d hub_deaths(mine)=%d hub_deaths(all)=%d of_which_corpse=%d | outlined_vanished_unhidden=%d bound_vanished=%d bound_still_30s=%d',
+            stats.kills_game or 0,stats.deaths_mine or 0,stats.deaths_all or 0,stats.deaths_corpse or 0,stats.vanished_lit or 0,stats.bound_vanished or 0,still))
+        log('mission check: game kills by weapon: '..list(stats.kill_src))
+        log(string.format('mission check: no death event, hidden because the Hub entity went invalid: bound=%d voted=%d',stats.gone_hidden or 0,stats.gone_hidden_vote or 0))
+    end
+    local kept={}
+    local carry_rx,carry_early=0,0
+    if keep_epoch~=nil then
+        for _,sp in ipairs(spawns) do sp.early=true;sp.started=nil;kept[#kept+1]=sp end
+        carry_rx,carry_early=stats.spawn_rx or 0,stats.spawn_early or 0
+    end
+    stats=new_stats();spawns=kept;bind={};bound={};first_seen={};last_move={};last_pos={};ents={};gone_since={}
+    if keep_epoch==nil then spawn_ids={} end
+    stats.spawn_rx,stats.spawn_early=carry_rx,carry_early
     lists={};owner_of={};hidden={};hist={};deaths={};hits={};votes={};last_vote={};in_since=nil
 end
 local function clear_subscriptions()
@@ -234,7 +425,7 @@ end
 local function connect(D)
     clear_subscriptions()
     hub=D
-    for ev,fn in pairs({entity_died=on_died,entity_damaged=on_damaged,mission_started=reset,mission_ended=reset}) do
+    for ev,fn in pairs({entity_died=on_died,entity_damaged=on_damaged,entity_spawned=on_spawned,player_kill_credited=on_kill,mission_started=function(e) reset(true) end,mission_ended=function() reset() end}) do
         local s=D.on(ev,function(e) local ok,err=pcall(fn,e);if not ok then report(ev..': '..tostring(err)) end end,
             {owner=OWNER,id=ev})
         if not s then error('subscription unavailable: '..ev) end
@@ -251,12 +442,31 @@ local function refresh_lists()
         local ok,list=pcall(sr.World.units_by_resource,W,name)
         list=(ok and type(list)=='table') and list or {}
         lists[name]=list
-        for _,u in ipairs(list) do seen[u]=name end
+        for _,u in ipairs(list) do seen[u]=name; if not first_seen[u] then first_seen[u]=clock end end
+    end
+    for u,nm in pairs(owner_of) do
+        if not seen[u] and not hidden[u] and OUTLINE_UNITS[nm] and OUTLINE_UNITS[nm].g then
+            stats.vanished_lit=(stats.vanished_lit or 0)+1
+            if bound[u] then stats.bound_vanished=(stats.bound_vanished or 0)+1 end
+        end
     end
     owner_of=seen
+    for u in pairs(first_seen) do if not seen[u] then first_seen[u]=nil end end
+    for u,id in pairs(bound) do if not seen[u] then bound[u]=nil; bind[id]=nil end end
+    for u in pairs(last_move) do if not seen[u] then last_move[u]=nil;last_pos[u]=nil end end
     for u in pairs(hist) do if not seen[u] then hist[u]=nil end end
     for u in pairs(hidden) do if not seen[u] then hidden[u]=nil end end
     return true
+end
+local function refresh_one(key)
+    local W=sr.Application.main_world()
+    if not W then return end
+    for _,name in ipairs(CANDS[key] or {key}) do
+        local ok,list=pcall(sr.World.units_by_resource,W,name)
+        list=(ok and type(list)=='table') and list or {}
+        lists[name]=list
+        for _,u in ipairs(list) do owner_of[u]=name; if not first_seen[u] then first_seen[u]=clock end end
+    end
 end
 local function check_meshes()
     for name,list in pairs(lists) do
@@ -292,6 +502,8 @@ local function sample()
                 local i=h.i%HN+1
                 h.i=i;if h.n<HN then h.n=h.n+1 end
                 h.t[i],h.x[i],h.y[i],h.z[i]=clock,x,y,z
+                local lp=last_pos[u]
+                if not lp or (lp[1]-x)^2+(lp[2]-y)^2+(lp[3]-z)^2>0.09 then last_pos[u]={x,y,z};last_move[u]=clock end
             end
         end
     end
@@ -318,7 +530,8 @@ end
 -- closest and second closest unit of resource `name` to p at time t
 local function rank(name,p,t)
     local b1,d1,d2=nil,math.huge,math.huge
-    for _,u in ipairs(lists[name] or {}) do
+    for _,res in ipairs(CANDS[name] or {name}) do
+    for _,u in ipairs(lists[res] or {}) do
         if not hidden[u] then
             local d=dist2_at(u,p,t)
             if d then
@@ -326,11 +539,14 @@ local function rank(name,p,t)
             end
         end
     end
+    end
     return b1,d1,d2
 end
 
 local function hide(u,name)
     if hidden[u] or not mesh_ok[name] then return false end
+    local okA,alive=pcall(sr.Unit.alive,u)
+    if not okA or not alive then return false end
     for _,i in ipairs(OUTLINE_UNITS[name].o) do
         local ok,err=pcall(sr.Unit.set_mesh_visibility,u,i,false)
         if not ok then report('set_mesh_visibility: '..tostring(err));return false end
@@ -347,6 +563,16 @@ local function process_hits()
         if u and d1<=HIT_R*HIT_R and math.sqrt(d2)-math.sqrt(d1)>=HIT_MARGIN then
             local v=votes[h.id];if not v then v={};votes[h.id]=v end
             v[u]=(v[u] or 0)+1
+            stats.hit_vote=stats.hit_vote+1
+        else
+            if not u then stats.hit_none=stats.hit_none+1
+            elseif d1>HIT_R*HIT_R then stats.hit_far=stats.hit_far+1
+            else stats.hit_amb=stats.hit_amb+1 end
+            if stats.hit_logged<5 then
+                stats.hit_logged=stats.hit_logged+1
+                log(string.format('hit not voted: %s n=%d d1=%s d2=%s lag=%.2f',short(h.name),#(CANDS[h.name] or {}),
+                    u and string.format('%.2f',math.sqrt(d1)) or '-',d2<math.huge and string.format('%.2f',math.sqrt(d2)) or '-',clock-h.t))
+            end
         end
     end
 end
@@ -355,21 +581,73 @@ local function voted(id,name,p,t)
     if not v then return nil end
     local best,bc=nil,0
     for u,c in pairs(v) do
-        if c>bc and not hidden[u] and owner_of[u]==name then best,bc=u,c end
+        if c>bc and not hidden[u] and owned(u,name,owner_of) then best,bc=u,c end
     end
     if best then
         local d=dist2_at(best,p,t)
         if d and d<=VOTE_R*VOTE_R then return best end
     end
 end
+local function process_spawns()
+    if #spawns==0 then return end
+    local list=spawns;spawns={}
+    local fresh={}
+    for _,s in ipairs(list) do
+        if not fresh[s.name] then refresh_one(s.name);fresh[s.name]=true end
+        if s.early and not s.started then s.started=true;s.till=clock+SPAWN_WAIT end
+        local R,M=SPAWN_R,SPAWN_MARGIN
+        if s.early then R,M=EARLY_R,EARLY_MARGIN end
+        local b1,d1,d2=nil,math.huge,math.huge
+        for _,res in ipairs(CANDS[s.name] or {s.name}) do
+        for _,u in ipairs(lists[res] or {}) do
+            if not bound[u] and not hidden[u] and (s.early or (first_seen[u] or 0)>=s.t-BORN_SLACK) then
+                local d=dist2_at(u,s,s.t)
+                if d then if d<d1 then b1,d2,d1=u,d1,d elseif d<d2 then d2=d end end
+            end
+        end
+        end
+        if b1 and d1<=R*R and math.sqrt(d2)-math.sqrt(d1)>=M then
+            bind[s.id]=b1;bound[b1]=s.id;stats.spawn_bound=stats.spawn_bound+1
+            if s.early then stats.early_bound=(stats.early_bound or 0)+1 end
+        elseif clock<s.till then
+            spawns[#spawns+1]=s
+        else
+            stats.spawn_open=stats.spawn_open+1
+        end
+    end
+end
+local function by_binding(p)
+    local u=p.id and bind[p.id]
+    if p.why==nil then
+        if not p.id then p.why='no_id'
+        elseif not u then p.why=spawn_ids[p.id] and 'spawn_not_bound' or 'no_spawn'
+        elseif hidden[u] then p.why='bound_unit_already_hidden'
+        elseif not owned(u,p.name,owner_of) then p.why='bound_unit_other_type' end
+    end
+    if not u or hidden[u] or not owned(u,p.name,owner_of) then return nil end
+    local d=dist2_at(u,p,p.t)
+    if not d or d>BIND_R*BIND_R then stats.far=stats.far+1;return nil end
+    local v=votes[p.id]
+    if v then
+        local mine=v[u] or 0
+        for w,c in pairs(v) do
+            if w~=u and c>=mine+OVERRULE and not hidden[w] and owned(w,p.name,owner_of) then stats.overruled=stats.overruled+1;return nil end
+        end
+    end
+    return u
+end
 local function match(p)
     if p.name then
-        local u=voted(p.id,p.name,p,p.t)
-        if u then return u,p.name end
+        if p.id and votes[p.id] and not p.counted then p.counted=true;stats.death_voted=stats.death_voted+1 end
+        local u=by_binding(p)
+        if u then return u,owner_of[u],'bind' end
+        u=voted(p.id,p.name,p,p.t)
+        if u then return u,owner_of[u],'vote' end
         local b,d1,d2=rank(p.name,p,p.t)
-        if b and d1<=TYPED_R*TYPED_R then return b,p.name end
+        if p.id and votes[p.id] then stats.pos_voted=(stats.pos_voted or 0)+1 end
+        if b and d1<=TYPED_R*TYPED_R then return b,owner_of[b],'pos' end
         -- a lone unit of that type a bit further out (big bodies) is still unambiguous
-        if b and d1<=LONE_R*LONE_R and math.sqrt(d2)-math.sqrt(d1)>=LONE_MARGIN then return b,p.name end
+        if b and d1<=LONE_R*LONE_R and math.sqrt(d2)-math.sqrt(d1)>=LONE_MARGIN then return b,owner_of[b],'pos' end
         return nil
     end
     local bu,bd,bn=nil,ANY_R*ANY_R,nil
@@ -379,7 +657,7 @@ local function match(p)
             if u and d1<bd then bu,bd,bn=u,d1,name end
         end
     end
-    return bu,bn
+    return bu,bn,'pos'
 end
 
 -- attachments: dark when the nearest body of their parent group is a dead (hidden) one
@@ -420,6 +698,38 @@ local function attachment_pass()
     end
 end
 
+local function entity_gone(id)
+    local en=ents[id]
+    if not en then return false end
+    local ok,valid=pcall(en.is_valid,en)
+    return ok and valid==false
+end
+local GONE_WAIT=2.0
+local function gone_ripe(id)
+    if not entity_gone(id) then gone_since[id]=nil;return false end
+    if not gone_since[id] then gone_since[id]=clock;return false end
+    return clock-gone_since[id]>=GONE_WAIT
+end
+local function gone_pass()
+    for id,u in pairs(bind) do
+        if gone_ripe(id) then
+            local name=owner_of[u]
+            if name and not hidden[u] and hide(u,name) then stats.gone_hidden=(stats.gone_hidden or 0)+1 end
+            bind[id]=nil;bound[u]=nil;ents[id]=nil;votes[id]=nil;last_vote[id]=nil;gone_since[id]=nil
+        end
+    end
+    for id,v in pairs(votes) do
+        if gone_ripe(id) then
+            local best,bc,second=nil,0,0
+            for u,c in pairs(v) do if c>bc then best,second,bc=u,bc,c elseif c>second then second=c end end
+            if best and bc>=2 and bc>=second+2 and not hidden[best] and not bound[best] then
+                local name=owner_of[best]
+                if name and hide(best,name) then stats.gone_hidden_vote=(stats.gone_hidden_vote or 0)+1 end
+            end
+            votes[id]=nil;last_vote[id]=nil;ents[id]=nil;gone_since[id]=nil
+        end
+    end
+end
 local function work()
     local fresh=false
     if clock>=list_next then
@@ -428,22 +738,39 @@ local function work()
         check_meshes()
     end
     sample()
+    process_spawns()
     process_hits()
     if #deaths>0 then
         local list=deaths;deaths={}
         for _,p in ipairs(list) do
-            local u,name=match(p)
+            local u,name,how=match(p)
+            if u and not name then u=nil end
             if u then
                 hide(u,name)
-                if p.id then votes[p.id]=nil;last_vote[p.id]=nil end
+                stats[how]=(stats[how] or 0)+1
+                if not p.name then
+                    stats.untyped_match=stats.untyped_match or {}
+                    local k=tostring(p.etype)..'->'..short(name);stats.untyped_match[k]=(stats.untyped_match[k] or 0)+1
+                end
+                if how~='bind' and p.why then
+                    stats.why=stats.why or {}
+                    stats.why[p.why]=(stats.why[p.why] or 0)+1
+                    if p.why=='no_spawn' then
+                        stats.nospawn=stats.nospawn or {}
+                        local k=short(name);stats.nospawn[k]=(stats.nospawn[k] or 0)+1
+                    end
+                end
+                if p.id then votes[p.id]=nil;last_vote[p.id]=nil;bind[p.id]=nil;ents[p.id]=nil end
+                local id=bound[u];if id then bind[id]=nil;bound[u]=nil end
             elseif clock<p.till then
                 deaths[#deaths+1]=p
-            elseif p.id then
-                votes[p.id]=nil;last_vote[p.id]=nil
+            else
+                stats.miss=stats.miss+1
+                if p.id then votes[p.id]=nil;last_vote[p.id]=nil;local w=bind[p.id];bind[p.id]=nil;if w then bound[w]=nil end end
             end
         end
     end
-    if fresh then attachment_pass() end
+    if fresh then gone_pass();attachment_pass() end
 end
 
 local function tick(dt)
@@ -459,10 +786,10 @@ local function tick(dt)
     end
     local m=D.mission and D.mission() or nil
     if type(m)~='table' then return end
-    if epoch and m.epoch~=epoch then reset() end
+    if epoch and m.epoch~=epoch then reset(true) end
     epoch=m.epoch
     if not m.in_mission then if in_since then reset() end;return end
-    if not in_since then in_since=clock end
+    if not in_since then in_since=clock;reset_stats_if_needed() end
     if clock-in_since<SETTLE then deaths={};hits={};return end
     local ok,err=pcall(work)
     if not ok then report('work: '..tostring(err)) end

@@ -1,6 +1,6 @@
 # hd2-enemy-outline
 
-Helldivers 2 模組「**敵人描邊(死亡自動關閉)**」的原始碼。版本：**1.3**
+Helldivers 2 模組「**敵人描邊(死亡自動關閉)**」的原始碼。版本：**1.4**
 
 敵人身上有淺藍綠色的描邊（來自 exo6 的「敌人高亮」／HD2EnemyHull），敵人死亡時本模組會把那一隻的描邊關掉。
 
@@ -9,7 +9,7 @@ Helldivers 2 模組「**敵人描邊(死亡自動關閉)**」的原始碼。版�
 | 項目 | 版本 | 用途 |
 |---|---|---|
 | MDL3 | 3.0.0-dev.57 | Lua 模組載入器 |
-| HD2 Data Hub | 0.6.6 | 提供 `entity_died`、`entity_damaged`、`mission()`（不能修改） |
+| HD2 Data Hub | 0.6.6 | 提供 `entity_spawned`、`entity_died`、`entity_damaged`、`mission()`（不能修改） |
 | HD2EnemyHull（敌人高亮，exo6） | 0.0.22 | 描邊模型與材質，打包時合併進同一個 patch；原檔在 `original/` |
 
 ## 目錄
@@ -27,6 +27,10 @@ package/                    manifest.json 與玩家用 README.txt
 ## 開發方式
 
 本專案大幅度使用 Claude 協助開發。
+
+## 免責聲明
+
+使用與否由個人決定，任何風險自行承擔，作者均不承擔任何責任。
 
 ## 出處與授權
 
