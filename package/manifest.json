@@ -2,7 +2,7 @@
   "Version": 1,
   "Guid": "0f5c7a2e-6b19-4d3e-9c84-3a1e7d2b5f60",
   "Name": "敵人描邊(死亡自動關閉)",
-  "Description": "HD2EnemyHull 0.0.22 原版描邊模型與材質，內含死亡自動關閉描邊程式 1.4（單一 patch）。需另裝 MDL3 與 HD2 Data Hub 0.6.6。",
+  "Description": "HD2EnemyHull 0.0.22 原版描邊模型與材質，內含死亡自動關閉描邊程式 1.5（單一 patch）。需另裝 MDL3 與 HD2 Data Hub 0.6.6。",
   "Options": [
     {
       "Name": "敵人描邊(死亡自動關閉)",

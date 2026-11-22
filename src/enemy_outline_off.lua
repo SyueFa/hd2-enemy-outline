@@ -1,5 +1,11 @@
 -- HD2-Addon: mods/combat/enemy_outline_off
--- 敵人描邊(死亡自動關閉) 1.4
+-- 敵人描邊(死亡自動關閉) 1.5
+-- 1.5: type -> model learning. The folder-based type map can be wrong (charger_tier2 is not the
+--      cha_charger model). When a spawn finds no new unit among its mapped models, it binds to
+--      the new outlined body (any model) that appeared at the spawn spot and remembers that
+--      model for the type. A typed death with no candidate falls back to any outlined body
+--      within 2 m and learns that model too. Learned pairs and missed deaths by type are logged.
+--      charger_tier2 (learned in game) now maps to cha_charger_bull.
 -- 1.4: birth binding.
 --  * Every entity_spawned event (Hub entity id, type, spawn position) is bound to the Lua unit
 --    of that type that appeared at that spot at that moment; a death with a bound id hides
@@ -29,7 +35,7 @@
 --  Attachments (weapons, backpacks, turrets, tongues, tentacles) follow their body.
 
 local OWNER = 'mods/combat/enemy_outline_off'
-local VERSION = '1.4'
+local VERSION = '1.5'
 local sr = rawget(_G, 'stingray')
 if type(sr) ~= 'table' then return {version=VERSION, error='no stingray'} end
 
@@ -180,7 +186,7 @@ local OUTLINE_UNITS={
 -- entity type (Hub) -> outlined model resources it can use (same folder)
 local EXTRA_TYPES={
     ['6021E22338333D88']={'content/fac_bugs/cha_boomer_nurser/cha_boomer_nurser'},
-    ['A05BD1EC67B3AC4C']={'content/fac_bugs/cha_charger/cha_charger'},
+    ['A05BD1EC67B3AC4C']={'content/fac_bugs/cha_charger_bull/cha_charger_bull'},   -- charger_tier2: learned in game
     ['FD5247653C897803']={'content/fac_bugs/cha_charger_bull/cha_charger_bull'},
     ['1F0A91729C0004E0']={'content/fac_bugs/cha_hunter/cha_hunter','content/fac_bugs/cha_hunter/cha_hunter_gloom_tier1','content/fac_bugs/cha_hunter/cha_hunter_tier3'},
     ['3D0E03E2D574E1CA']={'content/fac_bugs/cha_hunter/cha_hunter','content/fac_bugs/cha_hunter/cha_hunter_gloom_tier1','content/fac_bugs/cha_hunter/cha_hunter_tier3'},
@@ -261,6 +267,17 @@ for t,list in pairs(EXTRA_TYPES) do
     end
 end
 local function owned(u,key,owner) local r=owner[u];return r~=nil and IN[key]~=nil and IN[key][r]==true end
+local learned_log={}
+local function learn(key,res,how)
+    if not key or not res or not OUTLINE_UNITS[res] then return end
+    if not CANDS[key] then CANDS[key]={};IN[key]={} end
+    if IN[key][res] then return end
+    if CANDS[key][1]==key and #CANDS[key]==1 then CANDS[key]={key} end   -- model keys keep their own list
+    CANDS[key][#CANDS[key]+1]=res;IN[key][res]=true
+    local tag=tostring(key)..'->'..(res:match('([^/]+)$') or res)
+    if not learned_log[tag] then learned_log[tag]=true end
+    return tag,how
+end
 
 local function finite(n) return type(n)=='number' and n==n and math.abs(n)<1e8 end
 local function log(line)
@@ -400,6 +417,8 @@ local function reset(keep_epoch)
         log('mission types: deaths of types not in the table: '..list(stats.untyped))
         log('mission types: spawns of types not in the table: '..list(stats.untyped_spawn))
         log('mission types: untyped death matched to model: '..list(stats.untyped_match))
+        log('mission types: learned type -> model: '..list(stats.learned))
+        log('mission types: missed deaths by type: '..list(stats.missed_types))
         local still=0
         for u in pairs(bound) do if not hidden[u] and last_move[u] and clock-last_move[u]>30 then still=still+1 end end
         log(string.format('mission check: game_kills(mine)=%d hub_deaths(mine)=%d hub_deaths(all)=%d of_which_corpse=%d | outlined_vanished_unhidden=%d bound_vanished=%d bound_still_30s=%d',
@@ -606,6 +625,25 @@ local function process_spawns()
             end
         end
         end
+        if not (b1 and d1<=R*R) and not s.early then
+            -- no new unit among the mapped models: any new outlined body at the spawn spot
+            local a1,e1,e2=nil,math.huge,math.huge
+            for res,d in pairs(OUTLINE_UNITS) do
+                if d.g and not IN[s.name][res] then
+                    for _,u in ipairs(lists[res] or {}) do
+                        if not bound[u] and not hidden[u] and (first_seen[u] or 0)>=s.t-BORN_SLACK then
+                            local dd=dist2_at(u,s,s.t)
+                            if dd then if dd<e1 then a1,e2,e1=u,e1,dd elseif dd<e2 then e2=dd end end
+                        end
+                    end
+                end
+            end
+            if a1 and e1<=SPAWN_R*SPAWN_R and math.sqrt(math.min(e2,d1))-math.sqrt(e1)>=SPAWN_MARGIN then
+                local tag=learn(s.name,owner_of[a1],'spawn')
+                if tag then stats.learned=stats.learned or {};stats.learned[tag]=(stats.learned[tag] or 0)+1 end
+                b1,d1,d2=a1,e1,math.huge
+            end
+        end
         if b1 and d1<=R*R and math.sqrt(d2)-math.sqrt(d1)>=M then
             bind[s.id]=b1;bound[b1]=s.id;stats.spawn_bound=stats.spawn_bound+1
             if s.early then stats.early_bound=(stats.early_bound or 0)+1 end
@@ -648,6 +686,21 @@ local function match(p)
         if b and d1<=TYPED_R*TYPED_R then return b,owner_of[b],'pos' end
         -- a lone unit of that type a bit further out (big bodies) is still unambiguous
         if b and d1<=LONE_R*LONE_R and math.sqrt(d2)-math.sqrt(d1)>=LONE_MARGIN then return b,owner_of[b],'pos' end
+        if not b then
+            -- none of the mapped models exists: any outlined body within 2 m, and learn it
+            local bu,bd=nil,4.0
+            for res,d in pairs(OUTLINE_UNITS) do
+                if d.g then
+                    local u,dd=rank(res,p,p.t)
+                    if u and dd<bd then bu,bd=u,dd end
+                end
+            end
+            if bu then
+                local tag=learn(p.name,owner_of[bu],'death')
+                if tag then stats.learned=stats.learned or {};stats.learned[tag]=(stats.learned[tag] or 0)+1 end
+                return bu,owner_of[bu],'pos'
+            end
+        end
         return nil
     end
     local bu,bd,bn=nil,ANY_R*ANY_R,nil
@@ -766,6 +819,9 @@ local function work()
                 deaths[#deaths+1]=p
             else
                 stats.miss=stats.miss+1
+                stats.missed_types=stats.missed_types or {}
+                local k=p.name and (p.name:match('([^/]+)$') or p.name) or ('untyped:'..tostring(p.etype))
+                stats.missed_types[k]=(stats.missed_types[k] or 0)+1
                 if p.id then votes[p.id]=nil;last_vote[p.id]=nil;local w=bind[p.id];bind[p.id]=nil;if w then bound[w]=nil end end
             end
         end
