@@ -1,5 +1,16 @@
 -- HD2-Addon: mods/combat/enemy_outline_off
--- 敵人描邊(死亡自動關閉) 1.6
+-- 敵人描邊(死亡自動關閉) 1.7
+-- 1.7: rigs. Some walkers are two body models that the Hub spawns and kills as separate entities:
+--      the armoured scout walker is #ID[d3cd6f0ca83bb51e] (top) + cyborg_walker_scout (legs), and
+--      the two never share a mission with the plain scout walker. Each top model is paired one to
+--      one with the legs model that stays under it (largest horizontal gap over >= 2 s smallest,
+--      clearly ahead of the next candidate on both sides); a pair always goes dark together, so the
+--      head and gun linked to either half go too. A half that dies before it is paired takes the
+--      unpaired other half right under it. Learning log: pair offsets, part offsets on vehicles.
+--      Hulk types (lieutenant_*) map to both hulk models: lieutenant_assault (Hulk Scorcher) uses
+--      cha_lieutenant_assault and used to learn whatever stood at its drop spot (a berserker), so the
+--      berserker went dark on the hulk's death. Learning now keeps the model family: a type mapped to
+--      cha_<family>... only learns another cha_<family>... model (charger -> charger_bull still works).
 -- 1.6: parts, vehicles, turrets.
 --  * Parts (weapons, backpacks, shields, flags, tongues, vehicle guns, unnamed small parts) are
 --    linked to their body: over the part's first 5 s the body whose distance stays smallest owns
@@ -60,7 +71,7 @@
 --  Attachments (weapons, backpacks, turrets, tongues, tentacles) follow their body.
 
 local OWNER = 'mods/combat/enemy_outline_off'
-local VERSION = '1.6'
+local VERSION = '1.7'
 local sr = rawget(_G, 'stingray')
 if type(sr) ~= 'table' then return {version=VERSION, error='no stingray'} end
 
@@ -270,14 +281,14 @@ local EXTRA_TYPES={
     ['09FE0BE51A23396C']={'content/fac_cyborgs/cha_cyborg_elite/cha_cyborg_elite_rusher','content/fac_cyborgs/cha_cyborg_elite/cha_elite_female'},
     ['9D8827FED763650E']={'content/fac_cyborgs/cha_cyborg_elite/cha_cyborg_elite_rusher','content/fac_cyborgs/cha_cyborg_elite/cha_elite_female'},
     ['CBB1BA3366009C3A']={'content/fac_cyborgs/cha_cyborg_elite/cha_cyborg_elite_rusher','content/fac_cyborgs/cha_cyborg_elite/cha_elite_female'},
-    ['137988CEA16458F7']={'content/fac_cyborgs/cha_lieutenant/cha_lieutenant'},
-    ['1897BDD32105D2DC']={'content/fac_cyborgs/cha_lieutenant/cha_lieutenant'},
-    ['1E66EE1F6F7FD00E']={'content/fac_cyborgs/cha_lieutenant/cha_lieutenant'},
-    ['32CDEADA234FB8DF']={'content/fac_cyborgs/cha_lieutenant/cha_lieutenant'},
-    ['3E0537D606438FEA']={'content/fac_cyborgs/cha_lieutenant/cha_lieutenant'},
-    ['6DAB2EADF5D8B692']={'content/fac_cyborgs/cha_lieutenant/cha_lieutenant'},
-    ['96BA14C9EBB49CE1']={'content/fac_cyborgs/cha_lieutenant/cha_lieutenant'},
-    ['E44EC9F9B3FE1D2A']={'content/fac_cyborgs/cha_lieutenant/cha_lieutenant'},
+    ['137988CEA16458F7']={'content/fac_cyborgs/cha_lieutenant/cha_lieutenant','content/fac_cyborgs/cha_lieutenant_assault/cha_lieutenant_assault'},
+    ['1897BDD32105D2DC']={'content/fac_cyborgs/cha_lieutenant/cha_lieutenant','content/fac_cyborgs/cha_lieutenant_assault/cha_lieutenant_assault'},
+    ['1E66EE1F6F7FD00E']={'content/fac_cyborgs/cha_lieutenant/cha_lieutenant','content/fac_cyborgs/cha_lieutenant_assault/cha_lieutenant_assault'},
+    ['32CDEADA234FB8DF']={'content/fac_cyborgs/cha_lieutenant/cha_lieutenant','content/fac_cyborgs/cha_lieutenant_assault/cha_lieutenant_assault'},
+    ['3E0537D606438FEA']={'content/fac_cyborgs/cha_lieutenant/cha_lieutenant','content/fac_cyborgs/cha_lieutenant_assault/cha_lieutenant_assault'},
+    ['6DAB2EADF5D8B692']={'content/fac_cyborgs/cha_lieutenant/cha_lieutenant','content/fac_cyborgs/cha_lieutenant_assault/cha_lieutenant_assault'},
+    ['96BA14C9EBB49CE1']={'content/fac_cyborgs/cha_lieutenant/cha_lieutenant','content/fac_cyborgs/cha_lieutenant_assault/cha_lieutenant_assault'},
+    ['E44EC9F9B3FE1D2A']={'content/fac_cyborgs/cha_lieutenant/cha_lieutenant','content/fac_cyborgs/cha_lieutenant_assault/cha_lieutenant_assault'},
     ['57EED0EAC346CD9D']={'content/fac_cyborgs/cha_soldier/cha_soldier','content/fac_cyborgs/cha_soldier/cha_soldier_heavy_weapon','content/fac_cyborgs/cha_soldier/cha_soldier_iron_fleet','content/fac_cyborgs/cha_soldier/cha_soldier_rocket'},
     ['58B2B86C11369241']={'content/fac_cyborgs/cha_soldier/cha_soldier','content/fac_cyborgs/cha_soldier/cha_soldier_heavy_weapon','content/fac_cyborgs/cha_soldier/cha_soldier_iron_fleet','content/fac_cyborgs/cha_soldier/cha_soldier_rocket'},
     ['9647B00CC3A9D36F']={'content/fac_cyborgs/cha_soldier/cha_soldier','content/fac_cyborgs/cha_soldier/cha_soldier_heavy_weapon','content/fac_cyborgs/cha_soldier/cha_soldier_iron_fleet','content/fac_cyborgs/cha_soldier/cha_soldier_rocket'},
@@ -314,6 +325,7 @@ local function owned(u,key,owner) local r=owner[u];return r~=nil and IN[key]~=ni
 local WANTS_ID={}
 for key,list in pairs(CANDS) do for _,r in ipairs(list) do if r:sub(1,4)=='#ID[' then WANTS_ID[key]=true end end end
 local learned_log={}
+local learn_refused={}     -- this mission: type -> model the family rule refused
 local function learn(key,res,how)
     if not key or not res or not OUTLINE_UNITS[res] or not OUTLINE_UNITS[res].g then return end
     if OUTLINE_UNITS[key] then return end            -- model keys never learn (a part's death is not a body)
@@ -322,6 +334,11 @@ local function learn(key,res,how)
     -- a vehicle type never learns an infantry model (the walker's pilot / a bot standing next to it)
     local function veh(r) local d=OUTLINE_UNITS[r];if d and d.g then for _,g in ipairs(d.g) do if g=='cyborg_vehicle' or g=='warmachine' then return true end end end return false end
     if not veh(res) then for _,c in ipairs(CANDS[key]) do if veh(c) then return end end end
+    -- keep the model family: cha_lieutenant* never learns cha_berserker, cha_charger* may learn cha_charger_bull
+    local function fam(r) return (r:match('([^/]+)$') or r):match('^(cha_[^_]+)') end
+    local fams,any={},false
+    for _,c in ipairs(CANDS[key]) do local f=fam(c);if f then fams[f]=true;any=true end end
+    if any and not fams[fam(res) or ''] then local k=tostring(key)..'->'..(res:match('([^/]+)$') or res);learn_refused[k]=1;return nil,'refused' end
     if CANDS[key][1]==key and #CANDS[key]==1 then CANDS[key]={key} end   -- model keys keep their own list
     CANDS[key][#CANDS[key]+1]=res;IN[key][res]=true
     local tag=tostring(key)..'->'..(res:match('([^/]+)$') or res)
@@ -379,6 +396,22 @@ local function is_vehicle(name) local d=OUTLINE_UNITS[name];if not d or not d.g 
     for _,g in ipairs(d.g) do if STANDS_ALONE[g] then return true end end return false end
 local twin_track={}        -- vehicle body -> {other vehicle body -> largest squared distance in its first 5 s}
 local twins={}             -- vehicle body -> {other body model of the same machine -> true}
+-- rigs: one machine made of a top model and a bottom model that the Hub tracks as separate entities
+local RIGS={
+    {top={'#ID[d3cd6f0ca83bb51e]','#ID[ee00bfe8ff769f70]'},bottom={'content/fac_cyborgs/vehicles/cyborg_walker_scout/cyborg_walker_scout'}},   -- armoured scout walker
+}
+local RIG_XY=2.5           -- the halves of one machine stay within 2.5 m horizontally ...
+local RIG_DZ=5.0           -- ... and 5 m vertically
+local RIG_MARGIN=1.0       -- the next candidate's largest gap at least 1 m bigger
+local RIG_MIN=4            -- at least 4 refreshes (2 s) watched together before pairing
+local rig_side={}          -- model -> {rig index, 'top'|'bottom'}
+for i,r in ipairs(RIGS) do
+    for _,n in ipairs(r.top) do rig_side[n]={i,'top'} end
+    for _,n in ipairs(r.bottom) do rig_side[n]={i,'bottom'} end
+end
+local rig_mate={}          -- unit -> the other half of its machine
+local rig_last={}          -- unpaired lit half -> {x,y,z,i=rig,side=} its last spot (hid=true once dark or paired)
+local rig_track={}         -- top unit -> {bottom unit -> {n=samples, mx=largest squared horizontal gap, dz=sum of height gaps}}
 local veh_checks={}        -- learning: lit things around a vehicle 1 s after it went dark
 local fixed_pos={}         -- fixed turret unit -> {x,y,z,name}
 local wrecks={}            -- spots where a fixed turret unit disappeared: {x,y,z,t}
@@ -498,11 +531,27 @@ local function reset(keep_epoch)
         log('mission types: spawns of types not in the table: '..list(stats.untyped_spawn))
         log('mission types: untyped death matched to model: '..list(stats.untyped_match))
         log('mission types: learned type -> model: '..list(stats.learned))
+        log('mission types: refused to learn (other model family): '..list(learn_refused))
         log('mission types: missed deaths by type: '..list(stats.missed_types))
         log('mission check: fixed turrets destroyed (death type): '..list(stats.fixed_killed))
         log('mission learn: non-kill deaths of unknown types (ignored): '..list(stats.nonkill))
         log('mission learn: fixed turret units gone='..(stats.fixed_gone or 0)..' | new model on that spot hidden: '..list(stats.wreck_hidden)..' | older lit model still on that spot: '..list(stats.wreck_left))
         log('mission learn: vehicle dark -> still lit within 8 m after 1 s (h=height m, B=bound F=free L=part of): '..list(stats.veh_left)..' | stacked body models hidden together='..(stats.veh_stacked or 0)..' | twin body models paired='..(stats.twin_n or 0)..' hidden together='..(stats.twin_hidden or 0)..' | free unnamed model next to it hidden='..(stats.veh_free or 0))
+        do
+            local ut,ub=0,0
+            for i,r in ipairs(RIGS) do
+                for _,n in ipairs(r.top) do for _,u in ipairs(lists[n] or {}) do if not hidden[u] and not rig_mate[u] then ut=ut+1 end end end
+                for _,n in ipairs(r.bottom) do for _,u in ipairs(lists[n] or {}) do if not hidden[u] and not rig_mate[u] then ub=ub+1 end end end
+            end
+            local rn=stats.rig_n or 0
+            log(string.format('mission learn: rigs (top+bottom = one machine) paired=%d avg bottom-top height=%s avg gap=%s largest gap=%s | other half hidden with it=%d | unpaired half under it hidden=%d | half vanished -> other hidden=%d | lit and unpaired now: top=%d bottom=%d',
+                rn,rn>0 and string.format('%+.2f m',stats.rig_dz/rn) or '-',rn>0 and string.format('%.2f m',stats.rig_xy/rn) or '-',rn>0 and string.format('%.2f m',stats.rig_xy_max) or '-',
+                stats.rig_hidden or 0,stats.rig_unpaired_hidden or 0,stats.rig_vanished or 0,ut,ub))
+            local r={}
+            for k,o in pairs(stats.part_off or {}) do r[#r+1]=string.format('%s(dz%+.1f xy%.1f)=%d',k,o.dz/o.n,o.xy/o.n,o.n) end
+            table.sort(r)
+            log('mission learn: parts on vehicles (dz=part height above body m, xy=horizontal m): '..(#r>0 and table.concat(r,' ') or '-'))
+        end
         log('mission check: unnamed models seen (max at once): '..list(stats.idseen))
         log(string.format('mission check: parts linked to a body=%d hidden with their body=%d (same frame=%d) fixed turrets left lit=%d | hidden near a dead body=%d thrown away (<8 m)=%d no body within 15 m=%d',stats.att_linked_n or 0,stats.att_linked or 0,stats.att_instant or 0,(function() local n=0 for _ in pairs(stats.fixed_seen or {}) do n=n+1 end return n end)(),stats.att_near or 0,stats.att_flung or 0,stats.att_orphan or 0))
         log(string.format('mission check: unnamed-model scans=%d largest World.units=%d',stats.id_scans or 0,stats.id_scan_max or 0))
@@ -522,7 +571,7 @@ local function reset(keep_epoch)
         for _,sp in ipairs(spawns) do sp.early=true;sp.started=nil;kept[#kept+1]=sp end
         carry_rx,carry_early=stats.spawn_rx or 0,stats.spawn_early or 0
     end
-    stats=new_stats();spawns=kept;bind={};bound={};first_seen={};last_move={};last_pos={};ents={};gone_since={};emp_shown={};veh_checks={};twin_track={};twins={};fixed_pos={};wrecks={};orphan_since={};part_of={};part_track={};part_final={};part_owner={};id_units={}
+    stats=new_stats();spawns=kept;bind={};bound={};first_seen={};last_move={};last_pos={};ents={};gone_since={};emp_shown={};veh_checks={};twin_track={};twins={};fixed_pos={};wrecks={};orphan_since={};part_of={};part_track={};part_final={};part_owner={};id_units={};rig_mate={};rig_track={};rig_last={};learn_refused={}
     if keep_epoch==nil then spawn_ids={} end
     stats.spawn_rx,stats.spawn_early=carry_rx,carry_early
     lists={};owner_of={};hidden={};hist={};deaths={};hits={};votes={};last_vote={};in_since=nil
@@ -719,6 +768,32 @@ function hide(u,name)
         if not ok then report('set_mesh_visibility: '..tostring(err));return false end
     end
     hidden[u]=true
+    if rig_last[u] then rig_last[u].hid=true end
+    -- rig: either half gone means the machine is dead
+    local mate=rig_mate[u]
+    if mate and not hidden[mate] and owner_of[mate] and hide(mate,owner_of[mate]) then stats.rig_hidden=(stats.rig_hidden or 0)+1 end
+    if not mate and rig_side[name] then
+        -- not paired yet: the unpaired other half right under / over it, if only one is there
+        local side=rig_side[name];local other=side[2]=='top' and 'bottom' or 'top'
+        local bx,by,bz=pos(u)
+        if bx then
+            local b1,b1n,d1,d2=nil,nil,math.huge,math.huge
+            for _,on in ipairs(RIGS[side[1]][other]) do
+                for _,w in ipairs(lists[on] or {}) do
+                    if not hidden[w] and not rig_mate[w] then
+                        local x,y,z=pos(w)
+                        if x and math.abs(z-bz)<=RIG_DZ then
+                            local d=(x-bx)^2+(y-by)^2
+                            if d<d1 then b1,b1n,d2,d1=w,on,d1,d elseif d<d2 then d2=d end
+                        end
+                    end
+                end
+            end
+            if b1 and d1<=RIG_XY*RIG_XY and math.sqrt(d2)-math.sqrt(d1)>=RIG_MARGIN and hide(b1,b1n) then
+                stats.rig_unpaired_hidden=(stats.rig_unpaired_hidden or 0)+1
+            end
+        end
+    end
     -- the other body model of the same machine goes dark with it
     for w in pairs(twins[u] or {}) do
         if not hidden[w] and owner_of[w] and hide(w,owner_of[w]) then stats.twin_hidden=(stats.twin_hidden or 0)+1 end
@@ -739,7 +814,7 @@ function hide(u,name)
             for bn,bd in pairs(OUTLINE_UNITS) do
                 if bd.g and is_vehicle(bn) then
                     for _,w in ipairs(lists[bn] or {}) do
-                        if w~=u and not hidden[w] and (not bound[w] or bound[w]==bound[u]) then
+                        if w~=u and not hidden[w] and not rig_side[bn] and (not bound[w] or bound[w]==bound[u]) then
                             local x,y,z=pos(w)
                             if x and (x-bx)^2+(y-by)^2<=4.0 and hide(w,bn) then stats.veh_stacked=(stats.veh_stacked or 0)+1 end
                         end
@@ -748,7 +823,8 @@ function hide(u,name)
             end
             -- an unnamed vehicle model nobody owns (no spawn, no pair) right next to it: same machine
             for bn,bd in pairs(OUTLINE_UNITS) do
-                if bd.g and bn:sub(1,4)=='#ID[' and is_vehicle(bn) then
+                -- (rig halves are left to the rig pairing: a neighbour walker's top is never taken)
+                if bd.g and bn:sub(1,4)=='#ID[' and is_vehicle(bn) and not rig_side[bn] then
                     for _,w in ipairs(lists[bn] or {}) do
                         if w~=u and not hidden[w] and not bound[w] and not next(twins[w] or {}) then
                             local x,y,z=pos(w)
@@ -845,9 +921,9 @@ local function process_spawns()
                 end
             end
             if a1 and e1<=SPAWN_R*SPAWN_R and math.sqrt(math.min(e2,d1))-math.sqrt(e1)>=SPAWN_MARGIN then
-                local tag=learn(s.name,owner_of[a1],'spawn')
+                local tag,why=learn(s.name,owner_of[a1],'spawn')
                 if tag then stats.learned=stats.learned or {};stats.learned[tag]=(stats.learned[tag] or 0)+1 end
-                b1,d1,d2=a1,e1,math.huge
+                if why~='refused' then b1,d1,d2=a1,e1,math.huge end
             end
         end
         if b1 and d1<=R*R and math.sqrt(d2)-math.sqrt(d1)>=M then
@@ -902,9 +978,9 @@ local function match(p)
                 end
             end
             if bu then
-                local tag=learn(p.name,owner_of[bu],'death')
+                local tag,why=learn(p.name,owner_of[bu],'death')
                 if tag then stats.learned=stats.learned or {};stats.learned[tag]=(stats.learned[tag] or 0)+1 end
-                return bu,owner_of[bu],'pos'
+                if why~='refused' then return bu,owner_of[bu],'pos' end
             end
         end
         return nil
@@ -917,6 +993,110 @@ local function match(p)
         end
     end
     return bu,bn,'pos'
+end
+
+-- rigs: pair each top model with the bottom model that stays under it; either half gone = machine dead
+local function rig_pass()
+    -- a paired half that left the world (destroyed / removed) takes the other half with it
+    local gone={}
+    for u,m in pairs(rig_mate) do if not owner_of[u] then gone[#gone+1]={u,m} end end
+    for _,g in ipairs(gone) do
+        local u,m=g[1],g[2]
+        rig_mate[u]=nil
+        if owner_of[m] and not hidden[m] and hide(m,owner_of[m]) then stats.rig_vanished=(stats.rig_vanished or 0)+1 end
+    end
+    -- an unpaired, still-lit half that left the world: the unpaired other half right under / over its last spot
+    for u,l in pairs(rig_last) do
+        if not owner_of[u] then
+            rig_last[u]=nil
+            if not l.hid then
+                local other=l.side=='top' and 'bottom' or 'top'
+                local b1,b1n,d1,d2=nil,nil,math.huge,math.huge
+                for _,on in ipairs(RIGS[l.i][other]) do
+                    for _,w in ipairs(lists[on] or {}) do
+                        if not hidden[w] and not rig_mate[w] then
+                            local x,y,z=pos(w)
+                            if x and math.abs(z-l[3])<=RIG_DZ then
+                                local d=(x-l[1])^2+(y-l[2])^2
+                                if d<d1 then b1,b1n,d2,d1=w,on,d1,d elseif d<d2 then d2=d end
+                            end
+                        end
+                    end
+                end
+                if b1 and d1<=RIG_XY*RIG_XY and math.sqrt(d2)-math.sqrt(d1)>=RIG_MARGIN and hide(b1,b1n) then
+                    stats.rig_vanished=(stats.rig_vanished or 0)+1
+                end
+            end
+        end
+    end
+    for t,tr in pairs(rig_track) do
+        if not owner_of[t] or hidden[t] or rig_mate[t] then rig_track[t]=nil
+        else for b in pairs(tr) do if not owner_of[b] or hidden[b] or rig_mate[b] then tr[b]=nil end end end
+    end
+    for i,r in ipairs(RIGS) do
+        local tops,bots={},{}
+        for _,n in ipairs(r.top) do for _,u in ipairs(lists[n] or {}) do
+            if not hidden[u] and not rig_mate[u] then local x,y,z=pos(u);if x then tops[#tops+1]={u,x,y,z};rig_last[u]={x,y,z,i=i,side='top'} end
+            elseif rig_last[u] then rig_last[u].hid=true end end end
+        for _,n in ipairs(r.bottom) do for _,u in ipairs(lists[n] or {}) do
+            if not hidden[u] and not rig_mate[u] then local x,y,z=pos(u);if x then bots[#bots+1]={u,x,y,z};rig_last[u]={x,y,z,i=i,side='bottom'} end
+            elseif rig_last[u] then rig_last[u].hid=true end end end
+        if #tops>0 and #bots>0 then
+            for _,a in ipairs(tops) do
+                local tr=rig_track[a[1]]
+                for _,b in ipairs(bots) do
+                    local xy=(b[2]-a[2])^2+(b[3]-a[3])^2
+                    local dz=b[4]-a[4]
+                    local e=tr and tr[b[1]]
+                    if e then
+                        e.n=e.n+1;e.dz=e.dz+dz
+                        if math.abs(dz)>RIG_DZ then e.mx=math.huge elseif xy>e.mx then e.mx=xy end
+                    elseif xy<=36 and math.abs(dz)<=RIG_DZ then
+                        if not tr then tr={};rig_track[a[1]]=tr end
+                        tr[b[1]]={n=1,mx=xy,dz=dz}
+                    end
+                end
+            end
+            -- decide: mutual best, small gap, clearly ahead of the runner-up on both sides
+            local function best_of_top(t)
+                local tr=rig_track[t];if not tr then return nil end
+                local b,bm,sm=nil,math.huge,math.huge
+                for w,e in pairs(tr) do
+                    if e.n>=2 then
+                        if e.mx<bm then b,sm,bm=w,bm,e.mx elseif e.mx<sm then sm=e.mx end
+                    end
+                end
+                return b,bm,sm
+            end
+            local function best_of_bottom(w)
+                local t,bm,sm=nil,math.huge,math.huge
+                for tu,tr in pairs(rig_track) do
+                    local e=tr[w]
+                    if e and e.n>=2 then
+                        if e.mx<bm then t,sm,bm=tu,bm,e.mx elseif e.mx<sm then sm=e.mx end
+                    end
+                end
+                return t,bm,sm
+            end
+            for _,a in ipairs(tops) do
+                local t=a[1]
+                local b,bm,sm=best_of_top(t)
+                local e=b and rig_track[t][b]
+                if e and e.n>=RIG_MIN and bm<=RIG_XY*RIG_XY and math.sqrt(sm)-math.sqrt(bm)>=RIG_MARGIN then
+                    local t2,_,sm2=best_of_bottom(b)
+                    if t2==t and math.sqrt(sm2)-math.sqrt(bm)>=RIG_MARGIN then
+                        rig_mate[t]=b;rig_mate[b]=t;rig_last[t]=nil;rig_last[b]=nil
+                        stats.rig_n=(stats.rig_n or 0)+1
+                        stats.rig_dz=(stats.rig_dz or 0)+e.dz/e.n
+                        stats.rig_xy=(stats.rig_xy or 0)+math.sqrt(bm)
+                        if math.sqrt(bm)>(stats.rig_xy_max or 0) then stats.rig_xy_max=math.sqrt(bm) end
+                        rig_track[t]=nil
+                        for _,tr in pairs(rig_track) do tr[b]=nil end
+                    end
+                end
+            end
+        end
+    end
 end
 
 -- attachments: dark when the nearest body of their parent group is a dead (hidden) one
@@ -1020,6 +1200,17 @@ local function attachment_pass()
                                     if pick then
                                         part_owner[pick]=part_owner[pick] or {};part_owner[pick][name]=u
                                         stats.att_linked_n=(stats.att_linked_n or 0)+1
+                                        -- learning: where a part sits on a vehicle (which model is above which)
+                                        local bn=owner_of[pick]
+                                        if bn and is_vehicle(bn) then
+                                            local px,py,pz=pos(pick)
+                                            if px then
+                                                stats.part_off=stats.part_off or {}
+                                                local k=short(name)..'@'..short(bn)
+                                                local o=stats.part_off[k];if not o then o={n=0,dz=0,xy=0};stats.part_off[k]=o end
+                                                o.n=o.n+1;o.dz=o.dz+(z-pz);o.xy=o.xy+math.sqrt((x-px)^2+(y-py)^2)
+                                            end
+                                        end
                                     end
                                 end
                             end
@@ -1241,7 +1432,7 @@ local function work()
             end
         end
     end
-    if fresh then gone_pass();attachment_pass();manned_pass() end
+    if fresh then rig_pass();gone_pass();attachment_pass();manned_pass() end
     if fresh and #wrecks>0 then
         -- a fixed turret's unit went away: whatever lit model shows up on that spot is its wreck
         local keep={}
